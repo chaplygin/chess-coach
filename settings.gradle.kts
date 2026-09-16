@@ -1,12 +1,6 @@
 pluginManagement {
     repositories {
-        google {
-            content {
-                includeGroupByRegex("com\.android.*")
-                includeGroupByRegex("com\.google.*")
-                includeGroupByRegex("androidx.*")
-            }
-        }
+        google()
         mavenCentral()
         gradlePluginPortal()
     }
@@ -17,7 +11,7 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-        // chesslib is NOT on Maven Central - it is only published via JitPack.
+        // chesslib нет на Maven Central, она публикуется только через JitPack.
         maven { url = uri("https://jitpack.io") }
     }
 }
