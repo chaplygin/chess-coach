@@ -125,7 +125,7 @@ class LichessOAuth(
                 .build()
 
             httpClient.newCall(request).execute().use { response ->
-                val body = response.body.string()
+                val body = response.body?.string().orEmpty()
                 if (!response.isSuccessful) {
                     throw AuthError.TokenExchangeFailed(response.code, body.take(300))
                 }

@@ -97,7 +97,7 @@ class LichessApi(
                     !response.isSuccessful ->
                         throw IOException("Lichess вернул HTTP ${response.code}")
 
-                    else -> response.body.string()
+                    else -> response.body?.string().orEmpty()
                 }
             }
         }
