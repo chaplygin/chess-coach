@@ -1,0 +1,14 @@
+# Сборка
+.gradle/
+build/
+local.properties
+*.apk
+*.aab
+
+# Stockfish скачивается в CI, а не хранится в репозитории (76 МБ)
+app/src/main/jniLibs/
+
+# IDE
+.idea/
+*.iml
+.DS_Store

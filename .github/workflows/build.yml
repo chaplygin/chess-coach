@@ -1,0 +1,62 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      # Логика тренера живёт в чистых JVM-модулях и проверяется без Android SDK
+      # и без телефона. Падение здесь должно ломать сборку раньше, чем соберётся APK.
+      - name: Unit tests (:core, :coach)
+        run: ./gradlew :core:test :coach:test --stacktrace
+
+      - name: Assemble debug APK
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      - name: Stage APK with a traceable name
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          cp app/build/outputs/apk/debug/app-debug.apk "out/chesscoach-${GITHUB_SHA::7}.apk"
+          ls -lh out/
+
+      # Имя артефакта постоянное, чтобы `gh run download --name chesscoach-debug`
+      # всегда работал одинаково. Имя файла внутри помечено коротким SHA.
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: chesscoach-debug
+          path: out/*.apk
+          retention-days: 30
+
+      - name: Publish test reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            core/build/reports/tests/
+            coach/build/reports/tests/
+          retention-days: 7

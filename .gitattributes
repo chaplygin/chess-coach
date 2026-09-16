@@ -1,0 +1,8 @@
+# Windows-машина разработчика + Linux-раннер CI. Без этого gradlew уезжает
+# в CRLF и на раннере падает с "bad interpreter: /bin/sh^M".
+* text=auto eol=lf
+*.bat text eol=crlf
+*.jar binary
+*.apk binary
+*.png binary
+*.so binary
