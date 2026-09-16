@@ -24,8 +24,20 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      # Готовое действие setup-android@v3 ставит давно удалённый пакет "tools"
+      # и падает. Android SDK на раннере уже есть, поэтому доустанавливаем
+      # только то, что нужно, и делаем это явно.
+      - name: Set up Android SDK packages
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="$(find "$SDK/cmdline-tools" -name sdkmanager -type f | sort | tail -n1)"
+          test -n "$SDKMANAGER"
+          echo "sdkmanager: $SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
 
       # Логика тренера живёт в чистых JVM-модулях и проверяется без Android SDK
       # и без телефона. Падение здесь должно ломать сборку раньше, чем соберётся APK.
