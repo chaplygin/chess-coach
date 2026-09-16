@@ -39,6 +39,19 @@ jobs:
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
 
+      # Бинарник 76 МБ в git не кладём — CI берёт его из релиза Stockfish.
+      - name: Fetch Stockfish binary
+        env:
+          STOCKFISH_RELEASE_TAG: sf_19
+          STOCKFISH_ASSET: stockfish-android-arm64-universal.tar.gz
+          JNI_LIBS_DIR: app/src/main/jniLibs/arm64-v8a
+        run: ./tools/ci/fetch_stockfish.sh
+
+      # Android 15+ работает на устройствах со страницей 16 КБ. Бинарник собран
+      # не нами, поэтому выравнивание проверяем, а не предполагаем.
+      - name: Check 16 KB page alignment
+        run: python3 tools/ci/check_elf_align.py app/src/main/jniLibs/arm64-v8a/libstockfish.so
+
       # Логика тренера живёт в чистых JVM-модулях и проверяется без Android SDK
       # и без телефона. Падение здесь должно ломать сборку раньше, чем соберётся APK.
       - name: Unit tests (:core, :coach)
@@ -53,6 +66,13 @@ jobs:
           mkdir -p out
           cp app/build/outputs/apk/debug/app-debug.apk "out/chesscoach-${GITHUB_SHA::7}.apk"
           ls -lh out/
+          # Пустой jniLibs не ломает сборку — ошибка вылезла бы только на телефоне.
+          if unzip -l app/build/outputs/apk/debug/app-debug.apk | grep -q 'lib/arm64-v8a/libstockfish.so'; then
+            echo "Проверено: libstockfish.so внутри APK"
+          else
+            echo "ОШИБКА: libstockfish.so не попал в APK" >&2
+            exit 1
+          fi
 
       # Имя артефакта постоянное, чтобы `gh run download --name chesscoach-debug`
       # всегда работал одинаково. Имя файла внутри помечено коротким SHA.

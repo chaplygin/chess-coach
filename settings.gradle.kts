@@ -20,3 +20,4 @@ rootProject.name = "ChessCoach"
 include(":app")
 include(":core")
 include(":coach")
+include(":engine")
