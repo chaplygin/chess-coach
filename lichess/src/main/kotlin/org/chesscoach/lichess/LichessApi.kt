@@ -24,7 +24,7 @@ class UnauthorizedException : IOException("Токен Lichess недействи
  * делать не больше одного запроса за раз, а параллельные всплески — верный путь
  * получить 429 и временную блокировку.
  */
-class LichessApi(
+class LichessApi internal constructor(
     private val httpClient: OkHttpClient,
     private val tokenStore: TokenStore,
 ) {
@@ -106,7 +106,7 @@ class LichessApi(
         const val USER_AGENT = "ChessCoach/0.1 (Android; личный разбор партий)"
         private const val DEFAULT_RETRY_AFTER_SECONDS = 60L
 
-        fun defaultHttpClient(): OkHttpClient = OkHttpClient.Builder()
+        internal fun defaultHttpClient(): OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .build()

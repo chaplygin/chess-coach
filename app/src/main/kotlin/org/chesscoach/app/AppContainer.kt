@@ -1,9 +1,9 @@
 package org.chesscoach.app
 
 import android.content.Context
-import okhttp3.OkHttpClient
 import org.chesscoach.engine.EngineController
 import org.chesscoach.lichess.LichessApi
+import org.chesscoach.lichess.LichessClient
 import org.chesscoach.lichess.LichessOAuth
 import org.chesscoach.lichess.TokenStore
 
@@ -13,18 +13,21 @@ import org.chesscoach.lichess.TokenStore
  * Библиотеки внедрения зависимостей сюда сознательно не берутся: на этом
  * размере они дают только лишний обработчик аннотаций, а перекос его версий —
  * самая частая причина падения сборки, отлаживать которую локально нечем.
+ *
+ * HTTP-клиент здесь не упоминается намеренно: какой библиотекой сделаны
+ * запросы — внутреннее дело модуля :lichess.
  */
 class AppContainer(context: Context) {
 
     private val applicationContext = context.applicationContext
 
-    val httpClient: OkHttpClient by lazy { LichessApi.defaultHttpClient() }
+    private val lichess: LichessClient by lazy { LichessClient.create(applicationContext) }
 
-    val tokenStore: TokenStore by lazy { TokenStore(applicationContext) }
+    val tokenStore: TokenStore get() = lichess.tokenStore
 
-    val lichessApi: LichessApi by lazy { LichessApi(httpClient, tokenStore) }
+    val lichessApi: LichessApi get() = lichess.api
 
-    val lichessOAuth: LichessOAuth by lazy { LichessOAuth(httpClient, tokenStore) }
+    val lichessOAuth: LichessOAuth get() = lichess.oauth
 
     val engine: EngineController by lazy { EngineController(applicationContext) }
 

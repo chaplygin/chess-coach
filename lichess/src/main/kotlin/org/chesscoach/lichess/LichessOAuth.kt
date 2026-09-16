@@ -51,7 +51,7 @@ sealed class AuthError(message: String) : Exception(message) {
  * Токен без разрешения board:play физически не может сделать ход на аккаунте —
  * это встроенная гарантия честной игры, а не обещание в описании.
  */
-class LichessOAuth(
+class LichessOAuth internal constructor(
     private val httpClient: OkHttpClient,
     private val tokenStore: TokenStore,
 ) {
