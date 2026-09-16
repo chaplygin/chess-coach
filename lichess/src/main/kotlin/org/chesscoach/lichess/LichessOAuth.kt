@@ -22,7 +22,14 @@ object LichessEndpoints {
      */
     const val CLIENT_ID = "org.chesscoach.app"
 
-    const val REDIRECT_URI = "chesscoach://oauth-callback"
+    /**
+     * Lichess принимает только обратную доменную запись схемы: простое слово
+     * вроде chesscoach:// он отвергает с ответом "exotic redirect_uri scheme
+     * not allowed". Схема совпадает с идентификатором приложения, поэтому
+     * занять её другим приложением нельзя.
+     */
+    const val REDIRECT_SCHEME = "org.chesscoach.app"
+    const val REDIRECT_URI = "$REDIRECT_SCHEME://oauth-callback"
 }
 
 @Serializable

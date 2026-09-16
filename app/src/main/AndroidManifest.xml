@@ -31,7 +31,7 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="chesscoach" android:host="oauth-callback" />
+                <data android:scheme="org.chesscoach.app" android:host="oauth-callback" />
             </intent-filter>
         </activity>
     </application>

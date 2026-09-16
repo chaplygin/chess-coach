@@ -1,10 +1,13 @@
 package org.chesscoach.engine
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.flow.transformWhile
@@ -104,18 +107,34 @@ class StockfishProcess(private val binary: File) : Closeable {
         timeoutMs: Long,
         isTerminal: (String) -> Boolean,
     ): List<String>? = commandMutex.withLock {
-        withTimeoutOrNull(timeoutMs) {
-            _output
-                .onSubscription {
-                    setup.forEach { writeLine(it) }
-                    writeLine(command)
-                }
-                .transformWhile { line ->
-                    emit(line)
-                    !isTerminal(line)
-                }
-                .toList()
+        var finished = false
+        try {
+            withTimeoutOrNull(timeoutMs) {
+                _output
+                    .onSubscription {
+                        setup.forEach { writeLine(it) }
+                        writeLine(command)
+                    }
+                    .transformWhile { line ->
+                        emit(line)
+                        !isTerminal(line)
+                    }
+                    .toList()
+            }.also { finished = it != null }
+        } finally {
+            // Прерванный или не уложившийся в срок поиск продолжает считать, и
+            // его запоздалый bestmove оборвал бы следующий запрос — на экране
+            // оказалась бы оценка от чужой позиции. Поэтому гасим и дочитываем.
+            if (!finished) drainAbandonedSearch()
         }
+    }
+
+    private suspend fun drainAbandonedSearch() = withContext(NonCancellable) {
+        runCatching { writeLine("stop") }
+        withTimeoutOrNull(DRAIN_TIMEOUT_MS) {
+            _output.first { it.startsWith("bestmove") }
+        }
+        Unit
     }
 
     /**
@@ -147,6 +166,8 @@ class StockfishProcess(private val binary: File) : Closeable {
         writer = null
     }
 }
+
+private const val DRAIN_TIMEOUT_MS = 3_000L
 
 private fun thread(name: String, body: () -> Unit) {
     Thread(body, name).apply { isDaemon = true }.start()

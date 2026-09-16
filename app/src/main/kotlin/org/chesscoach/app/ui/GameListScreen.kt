@@ -1,5 +1,6 @@
 package org.chesscoach.app.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -38,6 +39,7 @@ import java.time.format.DateTimeFormatter
 fun GameListScreen(
     container: AppContainer,
     onSignOut: () -> Unit,
+    onOpenGame: (GameSummary) -> Unit,
     onOpenEngineCheck: () -> Unit,
 ) {
     var games by remember { mutableStateOf<List<GameSummary>>(emptyList()) }
@@ -114,7 +116,9 @@ fun GameListScreen(
                 modifier = Modifier.fillMaxSize().padding(top = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                items(games, key = { it.id }) { game -> GameRow(game) }
+                items(games, key = { it.id }) { game ->
+                    GameRow(game, onClick = { onOpenGame(game) })
+                }
             }
         }
 
@@ -123,14 +127,14 @@ fun GameListScreen(
 }
 
 @Composable
-private fun GameRow(game: GameSummary) {
+private fun GameRow(game: GameSummary, onClick: () -> Unit) {
     val outcomeColor = when (game.outcome) {
         GameSummary.Outcome.WIN -> Color(0xFF1E8E3E)
         GameSummary.Outcome.LOSS -> Color(0xFFC5221F)
         GameSummary.Outcome.DRAW -> Color(0xFF5F6368)
     }
 
-    Card(modifier = Modifier.fillMaxWidth()) {
+    Card(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),

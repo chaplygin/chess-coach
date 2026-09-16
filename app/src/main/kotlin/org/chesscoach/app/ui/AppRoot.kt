@@ -9,8 +9,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import org.chesscoach.app.AppContainer
+import org.chesscoach.core.GameSummary
 
-enum class Screen { LOGIN, GAMES, ENGINE }
+enum class Screen { LOGIN, GAMES, REVIEW, ENGINE }
 
 @Composable
 fun AppRoot(redirect: Uri?, onRedirectHandled: () -> Unit) {
@@ -22,6 +23,7 @@ fun AppRoot(redirect: Uri?, onRedirectHandled: () -> Unit) {
     }
     var authError by remember { mutableStateOf<String?>(null) }
     var completingLogin by remember { mutableStateOf(false) }
+    var selectedGame by remember { mutableStateOf<GameSummary?>(null) }
 
     LaunchedEffect(redirect) {
         val uri = redirect ?: return@LaunchedEffect
@@ -58,8 +60,25 @@ fun AppRoot(redirect: Uri?, onRedirectHandled: () -> Unit) {
                 container.tokenStore.signOut()
                 screen = Screen.LOGIN
             },
+            onOpenGame = { game ->
+                selectedGame = game
+                screen = Screen.REVIEW
+            },
             onOpenEngineCheck = { screen = Screen.ENGINE },
         )
+
+        Screen.REVIEW -> {
+            val game = selectedGame
+            if (game == null) {
+                screen = Screen.GAMES
+            } else {
+                GameReviewScreen(
+                    container = container,
+                    game = game,
+                    onBack = { screen = Screen.GAMES },
+                )
+            }
+        }
 
         Screen.ENGINE -> EngineScreen(
             container = container,
@@ -70,4 +89,4 @@ fun AppRoot(redirect: Uri?, onRedirectHandled: () -> Unit) {
     }
 }
 
-private const val REDIRECT_SCHEME = "chesscoach"
+private const val REDIRECT_SCHEME = "org.chesscoach.app"
