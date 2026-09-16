@@ -88,16 +88,44 @@ class StockfishProcess(private val binary: File) : Closeable {
         command: String,
         timeoutMs: Long,
         isTerminal: (String) -> Boolean,
+    ): List<String>? = request(emptyList(), command, timeoutMs, isTerminal)
+
+    /**
+     * Та же отправка, но с подготовительными командами (например `position fen ...`),
+     * выполненными под тем же замком.
+     *
+     * Разделять их на два вызова нельзя: между ними другой вызывающий успел бы
+     * вклиниться со своей позицией, и движок посчитал бы не то, что просили.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    suspend fun request(
+        setup: List<String>,
+        command: String,
+        timeoutMs: Long,
+        isTerminal: (String) -> Boolean,
     ): List<String>? = commandMutex.withLock {
         withTimeoutOrNull(timeoutMs) {
             _output
-                .onSubscription { writeLine(command) }
+                .onSubscription {
+                    setup.forEach { writeLine(it) }
+                    writeLine(command)
+                }
                 .transformWhile { line ->
                     emit(line)
                     !isTerminal(line)
                 }
                 .toList()
         }
+    }
+
+    /**
+     * Просит движок прекратить текущий поиск.
+     *
+     * Убивать процесс ради отмены нельзя — он держится тёплым намеренно.
+     * Stockfish всё равно выдаст финальный bestmove, и его нужно дочитать.
+     */
+    suspend fun stopSearch() {
+        runCatching { writeLine("stop") }
     }
 
     suspend fun send(command: String) = commandMutex.withLock { writeLine(command) }
