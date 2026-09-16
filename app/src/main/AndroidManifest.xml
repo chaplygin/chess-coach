@@ -10,13 +10,28 @@
         android:theme="@style/Theme.ChessCoach"
         android:extractNativeLibs="true">
 
+        <!--
+            singleTask нужен для возврата из браузера после входа в Lichess:
+            система доставит ссылку уже работающему экрану через onNewIntent,
+            а не создаст вторую копию приложения поверх первой.
+        -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:label="@string/app_name">
+
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- Адрес возврата, объявленный при запросе авторизации. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="chesscoach" android:host="oauth-callback" />
             </intent-filter>
         </activity>
     </application>

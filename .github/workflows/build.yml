@@ -54,8 +54,8 @@ jobs:
 
       # Логика тренера живёт в чистых JVM-модулях и проверяется без Android SDK
       # и без телефона. Падение здесь должно ломать сборку раньше, чем соберётся APK.
-      - name: Unit tests (:core, :coach)
-        run: ./gradlew :core:test :coach:test --stacktrace
+      - name: Unit tests (:core, :coach, :lichess)
+        run: ./gradlew :core:test :coach:test :lichess:testDebugUnitTest --stacktrace
 
       - name: Assemble debug APK
         run: ./gradlew :app:assembleDebug --stacktrace
@@ -91,4 +91,5 @@ jobs:
           path: |
             core/build/reports/tests/
             coach/build/reports/tests/
+            lichess/build/reports/tests/
           retention-days: 7

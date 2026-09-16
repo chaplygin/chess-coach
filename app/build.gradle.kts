@@ -51,6 +51,7 @@ dependencies {
     implementation(project(":core"))
     implementation(project(":coach"))
     implementation(project(":engine"))
+    implementation(project(":lichess"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
