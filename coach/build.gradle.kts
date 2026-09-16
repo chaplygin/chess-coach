@@ -10,7 +10,9 @@ kotlin {
 
 dependencies {
     api(project(":core"))
+    api(libs.kotlinx.coroutines.core)
     testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
 }
 
 tasks.test { useJUnit() }

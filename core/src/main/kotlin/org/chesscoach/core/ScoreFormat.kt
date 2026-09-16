@@ -1,6 +1,7 @@
 package org.chesscoach.core
 
 import com.github.bhlangonijr.chesslib.Side
+import java.util.Locale
 
 /**
  * Приведение оценки к виду, привычному человеку.
@@ -19,11 +20,18 @@ object ScoreFormat {
         is Score.Mate -> Score.Mate(-score.movesToMate)
     }
 
-    /** Например: +0.85, -1.20, #3, #-2. */
+    /**
+     * Например: +0.85, -1.20, #3, #-2.
+     *
+     * Локаль задана явно. По умолчанию разделитель берётся из настроек телефона,
+     * и на русском устройстве оценка печаталась бы как «+0,85» — а сверять её
+     * пользователь будет с разбором на lichess.org, где всегда точка.
+     */
     fun display(score: Score): String = when (score) {
         is Score.Cp -> {
             val pawns = score.centipawns / 100.0
-            if (pawns >= 0) "+%.2f".format(pawns) else "%.2f".format(pawns)
+            val body = String.format(Locale.ROOT, "%.2f", pawns)
+            if (pawns >= 0) "+" + body else body
         }
 
         is Score.Mate -> if (score.movesToMate >= 0) "#${score.movesToMate}" else "#${score.movesToMate}"

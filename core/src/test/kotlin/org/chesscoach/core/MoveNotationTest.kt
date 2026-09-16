@@ -76,6 +76,21 @@ class ScoreFormatTest {
     }
 
     @Test
+    fun `prints the same score whatever the phone locale is`() {
+        // На русской локали разделитель дробной части — запятая, и оценка
+        // печаталась бы как «+0,85». Сверять её пользователь будет с разбором
+        // на lichess.org, где всегда точка.
+        val original = java.util.Locale.getDefault()
+        try {
+            java.util.Locale.setDefault(java.util.Locale.forLanguageTag("ru-RU"))
+            assertEquals("+0.85", ScoreFormat.display(Score.Cp(85)))
+            assertEquals("-1.20", ScoreFormat.display(Score.Cp(-120)))
+        } finally {
+            java.util.Locale.setDefault(original)
+        }
+    }
+
+    @Test
     fun `measures how much a move gave away`() {
         assertEquals(70, ScoreFormat.centipawnLoss(Score.Cp(50), Score.Cp(-20)))
         assertEquals(0, ScoreFormat.centipawnLoss(Score.Cp(50), Score.Cp(50)))
