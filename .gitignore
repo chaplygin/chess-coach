@@ -12,3 +12,8 @@ app/src/main/jniLibs/
 .idea/
 *.iml
 .DS_Store
+
+# Локальные следы сборки: аварийные дампы JVM и журналы компилятора Kotlin
+hs_err_pid*.log
+replay_pid*.log
+.kotlin/
