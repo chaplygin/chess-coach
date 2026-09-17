@@ -126,6 +126,20 @@ data class OngoingOpponentDto(
     val ai: Int? = null,
 )
 
+/**
+ * Вариант игры в ответе /api/account/playing.
+ *
+ * Здесь Lichess отдаёт объект, а не строку: {"key":"standard","name":"Standard"}.
+ * В выгрузке партий (/api/games/user) то же поле — обычная строка, и именно это
+ * расхождение обрушивало экран текущей партии. Фикстуры тестов были написаны по
+ * нашей модели, а не по настоящему ответу, поэтому ошибку они не ловили.
+ */
+@Serializable
+data class VariantDto(
+    val key: String = "standard",
+    val name: String? = null,
+)
+
 @Serializable
 data class OngoingGameDto(
     val gameId: String,
@@ -136,7 +150,7 @@ data class OngoingGameDto(
     val isMyTurn: Boolean = false,
     val rated: Boolean = false,
     val speed: String = "unknown",
-    val variant: String = "standard",
+    val variant: VariantDto = VariantDto(),
     val secondsLeft: Int? = null,
     val opponent: OngoingOpponentDto = OngoingOpponentDto(),
 ) {
@@ -148,7 +162,7 @@ data class OngoingGameDto(
         isMyTurn = isMyTurn,
         rated = rated,
         speed = speed,
-        isStandardVariant = variant == "standard",
+        isOrdinaryChess = variant.key in ORDINARY_CHESS_VARIANTS,
         opponent = Opponent(
             name = opponent.username ?: opponent.ai?.let { "Компьютер, уровень $it" } ?: "Соперник",
             rating = opponent.rating,
@@ -171,7 +185,15 @@ data class OngoingGame(
     val isMyTurn: Boolean,
     val rated: Boolean,
     val speed: String,
-    val isStandardVariant: Boolean,
+    /**
+     * Играется ли партия по обычным шахматным правилам.
+     *
+     * Партия "от позиции" сюда входит: начальная расстановка у неё своя, но
+     * правила обычные, а тренер разбирает позицию, а не дебютную книгу. Не
+     * входят Chess960 и прочие варианты — там и движок, и детекторы дали бы
+     * неверные объяснения.
+     */
+    val isOrdinaryChess: Boolean,
     val opponent: Opponent,
 ) {
     /**
@@ -180,5 +202,14 @@ data class OngoingGame(
      * Только против движка Lichess: правила честной игры прямо запрещают любую
      * внешнюю помощь в партиях с людьми, и за это закрывают аккаунт.
      */
-    val liveCoachingAllowed: Boolean get() = opponent.isComputer && isStandardVariant
+    val liveCoachingAllowed: Boolean get() = opponent.isComputer && isOrdinaryChess
 }
+
+/**
+ * Варианты, которые играются по обычным правилам и потому разбираются.
+ *
+ * Список закрытый и разрешающий: неизвестный ключ считается неразбираемым, а
+ * не наоборот — молча разобрать Chess960 как обычную партию хуже, чем
+ * промолчать.
+ */
+private val ORDINARY_CHESS_VARIANTS = setOf("standard", "fromPosition")

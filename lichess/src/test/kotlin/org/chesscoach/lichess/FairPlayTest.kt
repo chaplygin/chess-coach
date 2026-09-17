@@ -29,7 +29,7 @@ class FairPlayTest {
         val game = ongoing(
             """
             {"gameId":"abc123","color":"white","fen":"8/8/8/8/8/8/8/8 w - - 0 1",
-             "isMyTurn":true,"variant":"standard",
+             "isMyTurn":true,"variant":{"key":"standard","name":"Standard"},
              "opponent":{"id":"ai","username":"Stockfish level 5","ai":5}}
             """.trimIndent()
         )
@@ -45,7 +45,7 @@ class FairPlayTest {
         val game = ongoing(
             """
             {"gameId":"def456","color":"black","fen":"8/8/8/8/8/8/8/8 b - - 0 1",
-             "isMyTurn":true,"rated":true,"variant":"standard",
+             "isMyTurn":true,"rated":true,"variant":{"key":"standard","name":"Standard"},
              "opponent":{"id":"petrov","username":"petrov","rating":1732}}
             """.trimIndent()
         )
@@ -61,7 +61,7 @@ class FairPlayTest {
         val game = ongoing(
             """
             {"gameId":"ghi789","color":"white","fen":"8/8/8/8/8/8/8/8 w - - 0 1",
-             "rated":false,"variant":"standard",
+             "rated":false,"variant":{"key":"standard","name":"Standard"},
              "opponent":{"username":"guest","rating":1200}}
             """.trimIndent()
         )
@@ -75,12 +75,29 @@ class FairPlayTest {
         val game = ongoing(
             """
             {"gameId":"jkl012","color":"white","fen":"8/8/8/8/8/8/8/8 w - - 0 1",
-             "variant":"chess960","opponent":{"username":"Stockfish","ai":3}}
+             "variant":{"key":"chess960","name":"Chess960"},"opponent":{"username":"Stockfish","ai":3}}
             """.trimIndent()
         )
 
         assertTrue(game.opponent.isComputer)
         assertFalse("нестандартный вариант — подсказок нет", game.liveCoachingAllowed)
+    }
+
+    @Test
+    fun `a game started from a position is analysed like ordinary chess`() {
+        // Расстановка своя, правила обычные — тренер разбирает позицию, а не
+        // дебютную книгу. Именно на таком ответе экран и падал: Lichess шлёт
+        // вариант объектом, а модель ждала строку.
+        val game = ongoing(
+            """
+            {"gameId":"pos001","color":"white","fen":"8/8/8/8/8/8/8/8 w - - 0 1",
+             "isMyTurn":true,"variant":{"key":"fromPosition","name":"From Position"},
+             "opponent":{"username":"Stockfish level 4","ai":4}}
+            """.trimIndent()
+        )
+
+        assertTrue(game.isOrdinaryChess)
+        assertTrue("против движка от позиции подсказки разрешены", game.liveCoachingAllowed)
     }
 
     @Test
