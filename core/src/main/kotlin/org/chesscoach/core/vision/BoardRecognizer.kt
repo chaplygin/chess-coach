@@ -696,12 +696,12 @@ private class Prototype(
 // меньше расстояния до своего же. Смотри BoardRecognizerTest за реальными
 // цифрами точности на этой версии.
 private val PROTOTYPES = listOf(
-    Prototype(RecognizedPieceType.KING, 0.896, 0.837, 0.944, 1.000, 0.889, 0.979, 0.610, 0.833),
-    Prototype(RecognizedPieceType.QUEEN, 0.813, 1.077, 0.802, 0.810, 0.714, 0.931, 0.541, 1.000),
-    Prototype(RecognizedPieceType.ROOK, 0.769, 0.867, 0.813, 0.557, 1.000, 0.998, 0.692, 0.167),
-    Prototype(RecognizedPieceType.BISHOP, 1.000, 0.667, 0.688, 0.688, 1.000, 0.975, 0.474, 0.273),
-    Prototype(RecognizedPieceType.KNIGHT, 0.811, 0.822, 0.651, 1.000, 0.792, 0.755, 0.622, 0.333),
-    Prototype(RecognizedPieceType.PAWN, 0.771, 0.703, 0.692, 0.684, 1.000, 0.971, 0.478, 0.590),
+    Prototype(RecognizedPieceType.KING, 1.000, 0.681, 0.500, 0.625, 1.000, 1.000, 0.523, 0.000),
+    Prototype(RecognizedPieceType.QUEEN, 0.894, 0.714, 0.733, 0.600, 1.000, 1.000, 0.526, 0.000),
+    Prototype(RecognizedPieceType.ROOK, 0.713, 0.672, 0.801, 0.623, 1.000, 1.000, 0.672, 0.000),
+    Prototype(RecognizedPieceType.BISHOP, 0.818, 0.704, 0.444, 0.517, 1.000, 0.972, 0.437, 0.121),
+    Prototype(RecognizedPieceType.KNIGHT, 0.757, 0.675, 0.774, 0.708, 1.000, 0.891, 0.621, 0.000),
+    Prototype(RecognizedPieceType.PAWN, 0.572, 0.670, 0.470, 0.454, 1.000, 0.999, 0.502, 0.000),
 )
 
 // Асимметрия — единственный надёжный признак коня среди всех шести фигур,
