@@ -1,10 +1,13 @@
 package org.chesscoach.app
 
+import android.Manifest
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -24,9 +27,21 @@ class MainActivity : ComponentActivity() {
      */
     private var redirect by mutableStateOf<Uri?>(null)
 
+    /**
+     * Разрешение на уведомления (Android 13+) — без него сервис разбора партии
+     * (GameAnalysisService) всё равно отработает, просто прогресс не покажется
+     * в шторке. Результат не важен: отказ не мешает самому разбору.
+     */
+    private val notificationPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         redirect = intent?.data
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
 
         setContent {
             MaterialTheme {

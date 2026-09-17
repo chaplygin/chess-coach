@@ -17,6 +17,29 @@ import org.chesscoach.coach.detectors.TrappedPieceDetector
 import org.chesscoach.coach.engine.EngineClient
 import org.chesscoach.coach.model.PositionExplanation
 import org.chesscoach.coach.text.TextRenderer
+import org.chesscoach.core.MoveInput
+import org.chesscoach.core.MoveInputResult
+
+/**
+ * Что вышло из хода, который человек предложил сам.
+ *
+ * Отдельные варианты для "такого хода нет" и "подходит несколько" не
+ * формальность: на набранное bxc4 при двух подходящих ходах ответ "такого хода
+ * здесь нет" — неправда, и человек пойдёт искать ошибку в позиции, а не в
+ * своей записи.
+ */
+sealed interface CandidateResult {
+    data class Explained(val uci: String, val text: String) : CandidateResult
+
+    /** Запись не разобрана или такой ход в этой позиции невозможен. */
+    object NotLegal : CandidateResult
+
+    /** Подходит больше одного хода — например bxc4 и Bxc4. */
+    object Ambiguous : CandidateResult
+
+    /** Ход законный, но движку нечего о нём сказать. */
+    object NoVerdict : CandidateResult
+}
 
 /**
  * Единственная публичная точка входа движка объяснений.
@@ -31,12 +54,38 @@ class CoachEngine(engineClient: EngineClient) {
     private val pipeline = PipelineOrchestrator(engineClient, featureSource)
 
     /** Структура разбора: факты и разделы, ещё не текст. */
-    suspend fun explain(fen: String, playedMoveUci: String? = null): PositionExplanation =
-        pipeline.explain(fen, playedMoveUci)
+    suspend fun explain(
+        fen: String,
+        playedMoveUci: String? = null,
+        opening: String? = null,
+    ): PositionExplanation = pipeline.explain(fen, playedMoveUci, opening)
 
     /** Готовый разбор тренера на русском. */
-    suspend fun explainAsText(fen: String, playedMoveUci: String? = null): String =
-        TextRenderer.render(explain(fen, playedMoveUci))
+    suspend fun explainAsText(
+        fen: String,
+        playedMoveUci: String? = null,
+        opening: String? = null,
+    ): String = TextRenderer.render(explain(fen, playedMoveUci, opening))
+
+    /**
+     * Разбор хода, который человек предложил сам.
+     *
+     * Считается тем же конвейером, что и обычный разбор: сравнение своего
+     * варианта с лучшим — это ровно та же задача, что и разбор сыгранного хода,
+     * и заводить для неё второй путь означало бы завести второй источник
+     * истины, который рано или поздно разойдётся с первым.
+     */
+    suspend fun tryCandidate(fen: String, input: String): CandidateResult {
+        val parsed = when (val result = MoveInput.parse(fen, input)) {
+            MoveInputResult.Unknown -> return CandidateResult.NotLegal
+            MoveInputResult.Ambiguous -> return CandidateResult.Ambiguous
+            is MoveInputResult.Parsed -> result
+        }
+
+        val explanation = pipeline.explain(fen, parsed.uci)
+        val text = TextRenderer.renderCandidate(explanation) ?: return CandidateResult.NoVerdict
+        return CandidateResult.Explained(parsed.uci, text)
+    }
 
     companion object {
         const val VERSION: String = "M5"

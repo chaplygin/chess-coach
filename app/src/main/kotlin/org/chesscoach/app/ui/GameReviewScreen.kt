@@ -3,6 +3,7 @@ package org.chesscoach.app.ui
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -22,36 +23,55 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlin.math.abs
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.chesscoach.app.AppContainer
+import org.chesscoach.app.analysis.GameAnalysisProgress
+import org.chesscoach.app.analysis.GameAnalysisService
+import org.chesscoach.app.analysis.GameAnalysisStore
+import org.chesscoach.app.analysis.ScanState
+import org.chesscoach.coach.CandidateResult
 import org.chesscoach.coach.model.ArrowStyle
 import org.chesscoach.coach.model.BoardArrow
 import org.chesscoach.coach.model.BoardMarks
 import org.chesscoach.coach.model.PositionExplanation
 import org.chesscoach.coach.text.TextRenderer
+import org.chesscoach.core.EvalGraph
 import org.chesscoach.core.GameReplay
 import org.chesscoach.core.GameSummary
+import org.chesscoach.core.MoveClassification
 import org.chesscoach.core.MoveNotation
+import org.chesscoach.core.catchingNonCancellation
+import org.chesscoach.core.mapCatchingNonCancellation
 import org.chesscoach.core.PlayerColor
+import org.chesscoach.core.PlyEvaluation
 import org.chesscoach.core.PlyPosition
 import org.chesscoach.core.START_FEN
 import org.chesscoach.core.Score
@@ -78,6 +98,8 @@ fun GameReviewScreen(
     game: GameSummary,
     onBack: () -> Unit,
 ) {
+    val context = LocalContext.current
+
     val positions = remember(game.id) {
         GameReplay.replay(game.movesSan, game.initialFen)
     }
@@ -89,6 +111,36 @@ fun GameReviewScreen(
     var thinking by remember(game.id) { mutableStateOf(false) }
     var engineError by remember(game.id) { mutableStateOf<String?>(null) }
 
+    // Полный разбор партии на зевки/ошибки/неточности (M6) — отдельный от
+    // разбора текущей позиции выше поток данных: один живёт весь сеанс показа
+    // экрана, другой переживает и сворачивание приложения в фоновом сервисе.
+    var evaluations by remember(game.id) { mutableStateOf<List<PlyEvaluation>?>(null) }
+    val analysisProgress = remember(game.id) { GameAnalysisProgress.flowFor(game.id) }
+    val scanState by analysisProgress.collectAsState(initial = null)
+
+    LaunchedEffect(game.id) {
+        // Кэш — первым делом: партия могла быть разобрана раньше, и гонять
+        // движок по ней заново незачем.
+        evaluations = GameAnalysisStore.read(context, game.id)
+    }
+
+    LaunchedEffect(scanState) {
+        val done = scanState as? ScanState.Done ?: return@LaunchedEffect
+        evaluations = done.evaluations
+    }
+
+    val evaluationsByPly = remember(evaluations) {
+        evaluations?.associateBy { it.ply } ?: emptyMap()
+    }
+
+    // Свой вариант хода: человек набирает ход и спрашивает, чем он хуже (или
+    // лучше) рекомендованного. Сбрасывается при смене позиции — вердикт про
+    // ход из другой позиции хуже, чем пустое место.
+    var candidateInput by remember(game.id) { mutableStateOf("") }
+    var candidateVerdict by remember(game.id) { mutableStateOf<String?>(null) }
+    var candidateThinking by remember(game.id) { mutableStateOf(false) }
+    val candidateScope = rememberCoroutineScope()
+
     val fen = currentFen(positions, currentPly)
     val movesState = rememberLazyListState()
 
@@ -98,6 +150,8 @@ fun GameReviewScreen(
         advice = null
         explanation = null
         engineError = null
+        candidateVerdict = null
+        candidateInput = ""
         if (positions.isEmpty()) return@LaunchedEffect
 
         delay(SETTLE_MS)
@@ -106,7 +160,7 @@ fun GameReviewScreen(
         // Сначала короткий поиск: оценка и стрелка появляются сразу, а не
         // через две с половиной секунды полного разбора.
         container.engine.analyzer()
-            .mapCatching { it.analyze(fen, SearchLimits(movetimeMs = 600, multiPv = 1)) }
+            .mapCatchingNonCancellation { it.analyze(fen, SearchLimits(movetimeMs = 600, multiPv = 1)) }
             .onSuccess { result ->
                 val line = result.lines.firstOrNull()
                 val uci = line?.pv?.firstOrNull()
@@ -129,7 +183,7 @@ fun GameReviewScreen(
             // берётся один раз — стрелки и текст строятся из неё же, вместо
             // того чтобы гонять движок повторно ради каждого представления.
             val playedUci = positions.getOrNull(currentPly + 1)?.uci
-            explanation = runCatching { container.coach.explain(fen, playedUci) }
+            explanation = catchingNonCancellation { container.coach.explain(fen, playedUci, game.openingName) }
                 .getOrNull()
         }
 
@@ -144,9 +198,11 @@ fun GameReviewScreen(
     }
 
     Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
+        modifier = Modifier.fillMaxSize().padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        // Фиксированная часть: доска не должна уезжать вместе с текстом
+        // разбора, который бывает длинным, — иначе её не видно, пока читаешь.
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -168,39 +224,139 @@ fun GameReviewScreen(
             arrows = arrows,
         )
 
-        ArrowLegend(arrows)
-
-        MoveStrip(
-            positions = positions,
-            currentPly = currentPly,
-            state = movesState,
-            onSelect = { currentPly = it },
-        )
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        // Прокручиваемая часть: всё, что ниже доски.
+        Column(
+            modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Button(
-                onClick = { if (currentPly >= 0) currentPly-- },
-                enabled = currentPly >= 0,
-                modifier = Modifier.weight(1f),
-            ) { Text("Назад") }
+            ArrowLegend(arrows)
 
-            Button(
-                onClick = { if (currentPly < positions.lastIndex) currentPly++ },
-                enabled = currentPly < positions.lastIndex,
-                modifier = Modifier.weight(1f),
-            ) { Text("Вперёд") }
+            AnalysisControls(
+                scanState = scanState,
+                analyzed = evaluations != null,
+                onStart = { GameAnalysisService.start(context, game) },
+            )
+
+            MoveStrip(
+                positions = positions,
+                currentPly = currentPly,
+                state = movesState,
+                evaluationsByPly = evaluationsByPly,
+                myColor = game.myColor,
+                onSelect = { currentPly = it },
+            )
+
+            evaluations?.let { list ->
+                EvalGraphBar(
+                    evaluations = list,
+                    currentPly = currentPly,
+                    onSelect = { currentPly = it },
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Button(
+                    onClick = { if (currentPly >= 0) currentPly-- },
+                    enabled = currentPly >= 0,
+                    modifier = Modifier.weight(1f),
+                ) { Text("Назад") }
+
+                Button(
+                    onClick = { if (currentPly < positions.lastIndex) currentPly++ },
+                    enabled = currentPly < positions.lastIndex,
+                    modifier = Modifier.weight(1f),
+                ) { Text("Вперёд") }
+            }
+
+            AdviceCard(
+                fen = fen,
+                advice = advice,
+                coachText = coachText,
+                thinking = thinking,
+                error = engineError,
+            )
+
+            CandidateMoveCard(
+                input = candidateInput,
+                verdict = candidateVerdict,
+                thinking = candidateThinking,
+                enabled = !thinking && engineError == null,
+                onInputChange = { candidateInput = it },
+                onSubmit = {
+                    val typed = candidateInput
+                    candidateScope.launch {
+                        candidateThinking = true
+                        candidateVerdict = catchingNonCancellation {
+                            verdictText(container.coach.tryCandidate(fen, typed))
+                        }.getOrElse { "Не удалось проверить ход: движок недоступен." }
+                        candidateThinking = false
+                    }
+                },
+            )
         }
+    }
+}
 
-        AdviceCard(
-            fen = fen,
-            advice = advice,
-            coachText = coachText,
-            thinking = thinking,
-            error = engineError,
-        )
+/** Вердикт тренера в текст. Каждый случай отвечает по делу, а не общим "не получилось". */
+private fun verdictText(result: CandidateResult): String = when (result) {
+    is CandidateResult.Explained -> result.text
+    CandidateResult.NotLegal -> "Такого хода в этой позиции нет. Запись годится любая: Nf3, exd5, O-O или g1f3."
+    CandidateResult.Ambiguous -> "Подходит больше одного хода. Уточните регистр: bxc4 — пешкой, Bxc4 — слоном."
+    CandidateResult.NoVerdict -> "Ход законный, но движку нечего о нём сказать в этой позиции."
+}
+
+/**
+ * Свой вариант хода.
+ *
+ * Вопрос "а что, если бы я сыграл так" — самый частый у человека, который
+ * читает разбор и не согласен с рекомендацией. Отвечает на него тот же
+ * конвейер, что разбирает сыгранный ход: сравнение с лучшим — ровно та же
+ * задача.
+ */
+@Composable
+private fun CandidateMoveCard(
+    input: String,
+    verdict: String?,
+    thinking: Boolean,
+    enabled: Boolean,
+    onInputChange: (String) -> Unit,
+    onSubmit: () -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Свой вариант", style = MaterialTheme.typography.labelLarge)
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OutlinedTextField(
+                    value = input,
+                    onValueChange = onInputChange,
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                    label = { Text("Ход, например Nf3") },
+                )
+                Button(
+                    onClick = onSubmit,
+                    enabled = enabled && !thinking && input.isNotBlank(),
+                ) { Text("Проверить") }
+            }
+
+            when {
+                thinking -> Text(
+                    "Тренер считает ваш вариант…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF5F6368),
+                )
+
+                verdict != null -> Text(verdict, style = MaterialTheme.typography.bodyMedium)
+            }
+        }
     }
 }
 
@@ -273,11 +429,61 @@ private fun ArrowLegend(arrows: List<BoardArrow>) {
     }
 }
 
+/**
+ * Управление полным разбором партии: кнопка запуска, прогресс сервиса,
+ * ошибка. Само чтение и запись кэша делает экран — этот блок только рисует
+ * состояние, которое ему дали.
+ */
+@Composable
+private fun AnalysisControls(
+    scanState: ScanState?,
+    analyzed: Boolean,
+    onStart: () -> Unit,
+) {
+    when {
+        scanState is ScanState.Running -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                "Разбор партии: ${scanState.done} из ${scanState.total}",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            LinearProgressIndicator(
+                progress = {
+                    if (scanState.total > 0) scanState.done.toFloat() / scanState.total else 0f
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+
+        analyzed -> Text(
+            "Партия разобрана",
+            style = MaterialTheme.typography.bodySmall,
+            color = Color(0xFF5F6368),
+        )
+
+        else -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            (scanState as? ScanState.Failed)?.let {
+                Text(it.message, style = MaterialTheme.typography.bodySmall, color = Color(0xFFC5221F))
+            }
+            TextButton(onClick = onStart) { Text("Разобрать партию") }
+        }
+    }
+}
+
+/** Оттенок фона хода в ленте по классификации. Лучший и хороший — без пометки. */
+private fun classificationTint(classification: MoveClassification): Color? = when (classification) {
+    MoveClassification.BLUNDER -> Color(0xFFFAD2CF)
+    MoveClassification.MISTAKE -> Color(0xFFFDE3B0)
+    MoveClassification.INACCURACY -> Color(0xFFFFF3B0)
+    MoveClassification.GOOD, MoveClassification.BEST -> null
+}
+
 @Composable
 private fun MoveStrip(
     positions: List<PlyPosition>,
     currentPly: Int,
     state: LazyListState,
+    evaluationsByPly: Map<Int, PlyEvaluation>,
+    myColor: PlayerColor,
     onSelect: (Int) -> Unit,
 ) {
     LazyRow(
@@ -288,10 +494,27 @@ private fun MoveStrip(
     ) {
         itemsIndexed(positions) { index, ply ->
             val selected = index == currentPly
+
+            // Чужие зевки разбирать бессмысленно, и лента от них только рябит —
+            // пометки только для ходов той стороны, за которую играл пользователь.
+            val playedByUser = (ply.whiteMoved && myColor == PlayerColor.WHITE) ||
+                (!ply.whiteMoved && myColor == PlayerColor.BLACK)
+            val tint = if (playedByUser) {
+                evaluationsByPly[ply.index]?.classification?.let(::classificationTint)
+            } else {
+                null
+            }
+
             Row(
                 modifier = Modifier
                     .clip(RoundedCornerShape(6.dp))
-                    .background(if (selected) Color(0xFFD7E3FC) else Color.Transparent)
+                    .background(
+                        when {
+                            selected -> Color(0xFFD7E3FC)
+                            tint != null -> tint
+                            else -> Color.Transparent
+                        }
+                    )
                     .clickable { onSelect(index) }
                     .padding(horizontal = 8.dp, vertical = 6.dp),
             ) {
@@ -306,6 +529,60 @@ private fun MoveStrip(
                 )
             }
         }
+    }
+}
+
+private val EVAL_GRAPH_HEIGHT = 28.dp
+
+/**
+ * График оценки партии от лица белых — узкая полоса под лентой ходов.
+ *
+ * Один Canvas и один столбик на полуход: выше середины — лучше белым, ниже —
+ * чёрным. Тап переводит на соответствующий полуход, поэтому график служит
+ * ещё и второй, более быстрой лентой ходов.
+ */
+@Composable
+private fun EvalGraphBar(
+    evaluations: List<PlyEvaluation>,
+    currentPly: Int,
+    onSelect: (Int) -> Unit,
+) {
+    if (evaluations.isEmpty()) return
+
+    Canvas(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(EVAL_GRAPH_HEIGHT)
+            .pointerInput(evaluations.size) {
+                detectTapGestures { offset ->
+                    val ply = (offset.x / size.width * evaluations.size)
+                        .toInt()
+                        .coerceIn(0, evaluations.lastIndex)
+                    onSelect(ply)
+                }
+            },
+    ) {
+        val barWidth = size.width / evaluations.size
+        val half = size.height / 2f
+
+        evaluations.forEachIndexed { index, evaluation ->
+            val fraction = EvalGraph.fraction(evaluation.scoreAfterWhite).toFloat()
+            val barHeight = half * fraction
+            val top = if (barHeight >= 0f) half - barHeight else half
+
+            drawRect(
+                color = if (index == currentPly) Color(0xFF1A73E8) else Color(0xFFBDC1C6),
+                topLeft = Offset(index * barWidth, top),
+                size = Size(barWidth, abs(barHeight).coerceAtLeast(1f)),
+            )
+        }
+
+        drawLine(
+            color = Color(0xFF9AA0A6),
+            start = Offset(0f, half),
+            end = Offset(size.width, half),
+            strokeWidth = 1f,
+        )
     }
 }
 

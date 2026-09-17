@@ -4,6 +4,7 @@ import org.chesscoach.coach.engine.CoachSearchLimits
 import org.chesscoach.coach.engine.EngineClient
 import org.chesscoach.core.EngineLine
 import org.chesscoach.engine.EngineController
+import org.chesscoach.core.catchingNonCancellation
 import org.chesscoach.engine.SearchLimits
 
 /**
@@ -17,7 +18,10 @@ class StockfishEngineClient(private val controller: EngineController) : EngineCl
 
     override suspend fun analyse(fen: String, limits: CoachSearchLimits): List<EngineLine> {
         val analyzer = controller.analyzer().getOrElse { return emptyList() }
-        return runCatching {
+        // Отмена — не "движок молчит": пустой список в этом случае заставил
+        // бы тренера собрать разбор без единой строки движка вместо того,
+        // чтобы честно свернуться вместе с экраном.
+        return catchingNonCancellation {
             analyzer.analyze(
                 fen,
                 SearchLimits(

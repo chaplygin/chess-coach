@@ -40,7 +40,7 @@ class KingSafetyDetector : Detector {
 
             val openFiles = openFilesNearKing(board, king, kingSide)
 
-            if (attackerSquares.isEmpty() && missingShield.isEmpty() && openFiles.isEmpty()) continue
+            if (!isSerious(attackerSquares.size, missingShield.size, openFiles.size)) continue
 
             val evidenceSquares = (listOf(king) + missingShield + attackerSquares).distinct()
 
@@ -56,6 +56,23 @@ class KingSafetyDetector : Detector {
         }
 
         return facts
+    }
+
+    /**
+     * Одного признака мало — нужно сочетание.
+     *
+     * Раньше факт создавался от любого из трёх признаков по отдельности, и это
+     * оказалось почти всегда: уже после 1.e4 у белого короля нет пешки щита на
+     * e2. Тренер в итоге на каждой позиции советовал "укрепить оборону короля",
+     * совет обесценился и стал шумом, а настоящую опасность в нём было не
+     * разглядеть. Теперь нужно либо двое нападающих, либо нападающий вместе с
+     * дырой в прикрытии, либо уже разобранный щит.
+     */
+    private fun isSerious(attackers: Int, missingShield: Int, openFiles: Int): Boolean = when {
+        attackers >= 2 -> true
+        attackers >= 1 && (missingShield >= 1 || openFiles >= 1) -> true
+        missingShield >= 2 && openFiles >= 1 -> true
+        else -> false
     }
 
     /** Клетка короля и восемь соседних — зона, откуда считаем нападающих. */

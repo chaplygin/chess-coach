@@ -62,7 +62,12 @@ object PositionAssessor {
      */
     private const val LARGE_MATERIAL_ADVANTAGE_CP = 500
 
-    fun assess(fen: String, features: FeatureSet, mover: Side): Section.PositionAssessment {
+    fun assess(
+        fen: String,
+        features: FeatureSet,
+        mover: Side,
+        opening: String? = null,
+    ): Section.PositionAssessment {
         val board = Board()
         val character = if (runCatching { board.loadFromFen(fen) }.isSuccess) {
             characterOf(board)
@@ -76,6 +81,7 @@ object PositionAssessor {
             materialCentipawns = features.materialCentipawns,
             character = character,
             ideas = ideasFor(features, mover, character),
+            opening = opening,
         )
     }
 

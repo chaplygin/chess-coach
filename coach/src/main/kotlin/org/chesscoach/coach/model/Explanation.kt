@@ -65,6 +65,23 @@ enum class StrategicIdea {
     KEEP_IT_CLOSED,
 }
 
+/**
+ * Совет, который на первый взгляд спорит с дебютным правилом: второй ход той
+ * же фигурой, пока другие не развиты и не сделана рокировка.
+ *
+ * Это не факт о позиции в смысле [Fact] — это оговорка к конкретной
+ * рекомендации, поэтому живёт при [Section.WhyThisMove], а не в наборе
+ * признаков. Доказательство всё равно обязательно: поля, с которых фигуры так
+ * и не тронулись.
+ */
+data class OpeningCaveat(
+    val movedPiece: com.github.bhlangonijr.chesslib.Piece,
+    val from: com.github.bhlangonijr.chesslib.Square,
+    val undevelopedSquares: List<com.github.bhlangonijr.chesslib.Square>,
+    val castlingPending: Boolean,
+    val evidence: Evidence,
+)
+
 data class AlternativeLine(
     val moveSan: String,
     val scoreFromWhite: Score,
@@ -88,22 +105,41 @@ sealed interface Section {
         val materialCentipawns: Int,
         val character: PositionCharacter,
         val ideas: List<StrategicIdea>,
+        /**
+         * Название дебюта, как его определил Lichess для этой партии.
+         *
+         * Своего определителя тут нет и не будет: дебютный справочник — это
+         * несколько тысяч строк данных, а Lichess уже отдаёт название вместе с
+         * партией. Null — значит сервер названия не дал (например, разбирается
+         * позиция вне партии), и тогда строки про дебют просто нет.
+         */
+        val opening: String? = null,
     ) : Section
 
-    /** Моя позиция: за что могут наказать прямо сейчас. */
+    /**
+     * Моя позиция: за что могут наказать прямо сейчас.
+     *
+     * Угроза и план соперника живут здесь, а не отдельными разделами: и то и
+     * другое отвечает на один вопрос — «что мне грозит». Разнесённые по
+     * разбору, они читались как две несвязанные новости.
+     *
+     * Пункты печатаются все и всегда, даже пустые: «Угроза: нет» — это ответ,
+     * а молчание читатель принимает за недосмотр тренера.
+     */
     data class MyPosition(
         val kingSafety: List<Fact>,
         val loosePieces: List<Fact>,
+        val threat: ThreatFact? = null,
+        val opponentPlan: List<PlanStep> = emptyList(),
     ) : Section
 
-    /** Моя атака: чем я могу наказать соперника. */
+    /** Моя атака: чем я могу наказать соперника, и к чему веду дело. */
     data class MyAttack(
         val mate: List<Fact>,
         val captures: List<Fact>,
         val activity: List<Fact>,
+        val plan: List<PlanStep> = emptyList(),
     ) : Section
-
-    data class Threat(val threat: ThreatFact) : Section
 
     /**
      * Разбор хода, сыгранного в партии, в сравнении с лучшим.
@@ -120,6 +156,13 @@ sealed interface Section {
         val centipawnLoss: Int,
         /** Чего лишился сыгранный ход по сравнению с лучшим. */
         val missed: List<Fact>,
+        /** Чем соперник наказывает — его лучший ответ на сыгранное. */
+        val refutationSan: String? = null,
+        /**
+         * Что соперник получил от этого хода: признаки, которых до хода не
+         * было. Без них «зевок» — это ярлык с числом, а не объяснение.
+         */
+        val punishment: List<Fact> = emptyList(),
     ) : Section {
         val matchesBest: Boolean get() = playedUci == bestUci
     }
@@ -136,11 +179,11 @@ sealed interface Section {
         val moveSan: String,
         val reasons: List<Reason>,
         val pointIsInTheLine: Boolean = false,
+        /** Ход спорит с дебютным правилом развития — это надо оговорить вслух. */
+        val openingCaveat: OpeningCaveat? = null,
     ) : Section
 
     data class Prophylaxis(val fact: ProphylaxisFact) : Section
-
-    data class Plan(val steps: List<PlanStep>) : Section
 
     data class Trap(
         val moveSan: String,

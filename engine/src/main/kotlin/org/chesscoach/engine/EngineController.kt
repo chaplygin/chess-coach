@@ -5,6 +5,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import org.chesscoach.core.catchingNonCancellation
 
 /**
  * Владеет процессом движка на время работы экрана.
@@ -27,7 +28,10 @@ class EngineController(private val context: Context) {
 
         val binary = StockfishBinary.locate(context).getOrElse { return@withLock Result.failure(it) }
 
-        runCatching {
+        // Не runCatching: на отмене он вернул бы Result.failure, и onFailure
+        // закрыл бы только что запущенный процесс. Экран, который просто
+        // переключили на другой ход, платил бы за это новым запуском движка.
+        catchingNonCancellation {
             withContext(Dispatchers.IO) {
                 val started = StockfishProcess(binary).apply { start() }
                 val created = StockfishAnalyzer(started)

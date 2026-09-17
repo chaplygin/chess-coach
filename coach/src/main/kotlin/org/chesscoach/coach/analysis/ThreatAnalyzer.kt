@@ -125,5 +125,5 @@ class ThreatAnalyzer(
  * позициях отличаются приложенные строки движка и записанные фигуры, и любой
  * признак выглядел бы новым.
  */
-private fun signature(fact: Fact): String =
+internal fun signature(fact: Fact): String =
     fact.javaClass.simpleName + ":" + fact.evidence.squares.joinToString(",")

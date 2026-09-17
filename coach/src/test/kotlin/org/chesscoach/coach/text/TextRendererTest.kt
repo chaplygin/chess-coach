@@ -46,11 +46,11 @@ class TextRendererTest {
 
     @Test
     fun `a section with no facts behind it is not printed, no header and no filler phrase`() {
-        val text = TextRenderer.render(explanation(listOf(Section.Plan(emptyList()))))
+        val text = TextRenderer.render(explanation(listOf(Section.Alternatives(emptyList()))))
 
         // Ни строкой не длиннее шапки: раздел без шагов не появляется вовсе.
         assertEquals("Ход 14, чёрные. Оценка +0.35", text)
-        assertFalse(text.contains("ПЛАН"))
+        assertFalse(text.contains("АЛЬТЕРНАТИВЫ"))
     }
 
     @Test
@@ -112,7 +112,7 @@ class TextRendererTest {
             favours = Side.WHITE,
             evidence = Evidence.fromEngine(EngineLine(1, Score.Cp(200), listOf("f3g5"), 12)),
         )
-        val sections = listOf(Section.Threat(threat))
+        val sections = listOf(Section.MyPosition(emptyList(), emptyList(), threat))
 
         val first = TextRenderer.render(explanation(sections))
         val second = TextRenderer.render(explanation(sections))
@@ -152,7 +152,7 @@ class TextRendererTest {
             ideas = emptyList(),
         )
 
-        val text = TextRenderer.render(explanation(listOf(Section.Threat(threat), trap, alternatives, material)))
+        val text = TextRenderer.render(explanation(listOf(Section.MyPosition(emptyList(), emptyList(), threat), trap, alternatives, material)))
         val body = text.substringAfter(System.lineSeparator())
 
         assertFalse(body.contains("222"))

@@ -156,10 +156,12 @@ class TextRendererEditorialTest {
 
         val text = TextRenderer.render(explanation(sections))
 
-        // Факт целиком ушёл в причины хода — секции МОЯ ПОЗИЦИЯ с пустыми
-        // руками нечего печатать, она пропадает вовсе, а не оставляет пустой
-        // заголовок.
-        assertFalse(text, text.contains("МОЯ ПОЗИЦИЯ"))
+        // Факт целиком ушёл в причины хода, поэтому свою строку в МОЯ ПОЗИЦИЯ
+        // он занять уже не может. Раздел всё равно печатается — с честным
+        // "нет" вместо повтора: одинаковый список пунктов от позиции к позиции
+        // важнее, чем экономия одной строки.
+        assertTrue(text, text.contains("МОЯ ПОЗИЦИЯ"))
+        assertTrue(text, text.contains("Безопасность короля: нет."))
         assertEquals(1, Regex("под давлением").findAll(text).count())
     }
 
@@ -200,8 +202,8 @@ class TextRendererEditorialTest {
             evidence = Evidence.fromEngine(EngineLine(1, Score.Cp(200), listOf("f3g5"), 12)),
         )
 
-        val text = TextRenderer.render(explanation(listOf(Section.Threat(threat))))
-        val threatBlock = text.substringAfter("УГРОЗА")
+        val text = TextRenderer.render(explanation(listOf(Section.MyPosition(emptyList(), emptyList(), threat))))
+        val threatBlock = text.substringAfter("Угроза:")
 
         assertFalse(threatBlock, threatBlock.contains("отсталая"))
         assertFalse(threatBlock, threatBlock.contains("пространства для манёвра"))

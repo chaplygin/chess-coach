@@ -3,6 +3,15 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!--
+        Сканирование партии движком идёт в foreground service (см.
+        GameAnalysisService): обычная корутина умерла бы, стоит пользователю
+        свернуть приложение посреди минуты-двух разбора.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <application
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
@@ -36,6 +45,15 @@
                 <data android:scheme="org.chesscoach.app" android:host="oauth-callback" />
             </intent-filter>
         </activity>
+
+        <!--
+            android:foregroundServiceType обязателен начиная с API 34 — без
+            него сервис падает прямо при вызове startForeground.
+        -->
+        <service
+            android:name=".analysis.GameAnalysisService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 
 </manifest>

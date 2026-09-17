@@ -47,6 +47,14 @@ data class ReasonDiffResult(
     val whyThisMove: Section.WhyThisMove?,
     val prophylaxis: ProphylaxisFact?,
     val moveScoreFromMover: Score?,
+    /** Лучший ответ соперника на разобранный ход — тот же поиск, что подтверждает оценку. */
+    val replyMoveSan: String? = null,
+    /**
+     * Что соперник выигрывает от этого хода: признаки в его пользу, которых
+     * до хода не было. Для лучшего хода список обычно пуст, для зевка в нём и
+     * лежит ответ на вопрос «чем именно плохо».
+     */
+    val opponentGains: List<Fact> = emptyList(),
 )
 
 /**
@@ -90,7 +98,31 @@ class ReasonDiffAnalyzer(
         val moveSan = MoveNotation.uciToSanOrRaw(fen, listOf(moveUci)).first()
         val whyThisMove = if (reasons.isEmpty()) null else Section.WhyThisMove(moveSan, reasons)
 
-        return ReasonDiffResult(whyThisMove, prophylaxis, moveScoreFromMover)
+        return ReasonDiffResult(
+            whyThisMove = whyThisMove,
+            prophylaxis = prophylaxis,
+            moveScoreFromMover = moveScoreFromMover,
+            replyMoveSan = replyUci?.let { MoveNotation.uciToSanOrRaw(fenAfterMove, listOf(it)).first() },
+            opponentGains = collectOpponentGains(mover, featuresBefore, featuresAfterMove),
+        )
+    }
+
+    /**
+     * Что появилось у соперника именно от этого хода.
+     *
+     * Сравнение идёт по [signature], а не по самим фактам: у одного и того же
+     * признака в двух позициях отличаются приложенные строки движка и
+     * записанные фигуры, и без этого новым выглядел бы каждый. Иначе тренер
+     * объявил бы негативом хода то, что стояло на доске и до него.
+     */
+    private fun collectOpponentGains(
+        mover: Side,
+        before: FeatureSet,
+        afterMove: FeatureSet,
+    ): List<Fact> {
+        val opponent = mover.flip()
+        val known = before.favouring(opponent).map(::signature).toSet()
+        return afterMove.favouring(opponent).filterNot { signature(it) in known }
     }
 
     /** Факты, которых не было до хода (или не было ещё и после ответа соперника) и которые на пользу ходившему. */

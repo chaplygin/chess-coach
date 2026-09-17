@@ -91,7 +91,7 @@ class PipelineOrchestratorTest {
         assertEquals(MoveClassification.MISTAKE, explanation.classification)
 
         // Угрозы нет (просадка ниже порога в 60 сантипешек).
-        assertNull(explanation.section<Section.Threat>())
+        assertNull(explanation.section<Section.MyPosition>()?.threat)
 
         // СЫГРАННЫЙ ХОД — главное новое содержание: сыгран не лучший ход,
         // классификация и потеря в сантипешках совпадают с тем, что уже

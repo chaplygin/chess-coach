@@ -28,12 +28,24 @@ class HangingDetector : Detector {
             val attacker = piece.pieceSide.flip()
             val loss = SeeCalculator.evaluateSquare(board, square, attacker)
             if (loss > 0) {
+                // Поле нападающего кладём в доказательство вместе с фигурой на
+                // нём: назвать причину ("бьёт пешка e4") потом будет неоткуда —
+                // факт может дожить до текста, относящегося к другой доске.
+                val first = SeeCalculator.firstCapture(board, square, attacker)
+                val squares = listOfNotNull(square, first?.from)
+
                 facts += HangingPieceFact(
                     square = square,
                     piece = piece,
                     lossCentipawns = loss,
                     favours = attacker,
-                    evidence = Evidence.see(square, loss),
+                    evidence = Evidence(
+                        squares = squares,
+                        seeCentipawns = loss,
+                        pieces = squares.associateWith { board.getPiece(it) }.filterValues { it != Piece.NONE },
+                    ),
+                    firstAttacker = first?.from,
+                    defended = first?.recaptureExists ?: false,
                 )
             }
         }

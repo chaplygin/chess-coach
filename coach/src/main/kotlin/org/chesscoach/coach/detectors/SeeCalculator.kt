@@ -68,6 +68,34 @@ object SeeCalculator {
     }
 
     /**
+     * Кто бьёт первым на [target] и найдётся ли чем взять обратно.
+     *
+     * Нужно не для счёта, а для объяснения: «конь на d5 потерян» без причины
+     * читается как каприз движка, а «бьёт пешка e4, защиты нет» человек
+     * проверяет глазами за секунду. Считается теми же legalMoves(), что и сам
+     * размен, — иначе тренер назвал бы нападающим связанную фигуру, которая
+     * взять не может, и объяснение оказалось бы враньём.
+     */
+    data class FirstCapture(val from: Square, val recaptureExists: Boolean)
+
+    fun firstCapture(board: Board, target: Square, attacker: Side): FirstCapture? {
+        val working = board.clone()
+        if (working.sideToMove != attacker) {
+            working.sideToMove = attacker
+            working.enPassant = Square.NONE
+            working.enPassantTarget = Square.NONE
+        }
+        if (working.isKingAttacked) return null
+
+        val captures = working.legalMoves().filter { it.to == target }
+        val move = captures.minByOrNull { pieceValue(working.getPiece(it.from)) } ?: return null
+
+        val after = working.clone()
+        after.doMove(move)
+        return FirstCapture(move.from, after.legalMoves().any { it.to == target })
+    }
+
+    /**
      * Итог конкретного хода [move] прямо сейчас и последующего размена на том же
      * поле. Null, если сам ход в этой позиции не сыграть по правилам (например,
      * фигура связана) — тогда это не угроза, а мираж, и оценивать нечего.

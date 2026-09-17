@@ -27,6 +27,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import org.chesscoach.app.AppContainer
+import org.chesscoach.core.catchingNonCancellation
 import org.chesscoach.core.GameSummary
 import org.chesscoach.core.PlayerColor
 import org.chesscoach.lichess.RateLimitedException
@@ -51,7 +52,7 @@ fun GameListScreen(
         loading = true
         error = null
 
-        runCatching {
+        catchingNonCancellation {
             val name = username ?: container.lichessApi.account().username.also {
                 container.tokenStore.saveUsername(it)
                 username = it

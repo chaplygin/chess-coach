@@ -18,6 +18,7 @@ import org.chesscoach.coach.model.MateFact
 import org.chesscoach.coach.model.MaterialVerdict
 import org.chesscoach.coach.model.MobilityEdgeFact
 import org.chesscoach.coach.model.OpenFileRookFact
+import org.chesscoach.coach.model.OpeningCaveat
 import org.chesscoach.coach.model.OutpostFact
 import org.chesscoach.coach.model.OverloadedDefenderFact
 import org.chesscoach.coach.model.PassedPawnFact
@@ -30,6 +31,7 @@ import org.chesscoach.coach.model.PositionCharacter
 import org.chesscoach.coach.model.PositionExplanation
 import org.chesscoach.coach.model.ProphylaxisFact
 import org.chesscoach.coach.model.Reason
+import org.chesscoach.coach.model.ReasonTier
 import org.chesscoach.coach.model.Section
 import org.chesscoach.coach.model.SkewerFact
 import org.chesscoach.coach.model.StrategicIdea
@@ -37,7 +39,9 @@ import org.chesscoach.coach.model.ThreatFact
 import org.chesscoach.coach.model.TrappedPieceFact
 import org.chesscoach.core.MoveClassification
 import org.chesscoach.core.MoveNotation
+import org.chesscoach.core.Score
 import org.chesscoach.core.ScoreFormat
+import java.util.Locale
 
 /**
  * Сборка [PositionExplanation] в текст разбора.
@@ -73,6 +77,17 @@ object TextRenderer {
 
     /** В угрозе — сам ход соперника и не больше двух следствий, объясняющих опасность. */
     private const val MAX_THREAT_CONSEQUENCES = 2
+
+    /** Потеря от фигуры и выше: такой зевок называем раньше любой тактики помельче. */
+    private const val HEAVY_LOSS_CP = 300
+
+    /** Выше этого числа точная цифра теряет смысл: упущенный мат даёт десятки пешек. */
+    private const val COLLAPSE_CP = 1000
+
+    /** Шкала для масштаба угрозы — в цене фигур, а не в сантипешках. */
+    private const val MINOR_SCALE_CP = 300
+    private const val ROOK_SCALE_CP = 500
+    private const val QUEEN_SCALE_CP = 900
 
     fun render(explanation: PositionExplanation): String {
         val glossary = Glossary()
@@ -110,6 +125,27 @@ object TextRenderer {
         }
     }
 
+    /**
+     * Разбор варианта, который человек набрал сам, — отдельным коротким блоком.
+     *
+     * Целиком повторять разбор позиции незачем: он уже на экране. Нужен ровно
+     * ответ на вопрос "а если бы я сыграл так": лучше это или хуже, чем лучший
+     * ход, и чем именно. Null — движку нечем оценить этот ход, и тогда честнее
+     * промолчать, чем выдать пустой заголовок.
+     */
+    fun renderCandidate(explanation: PositionExplanation): String? {
+        val section = explanation.section<Section.PlayedMove>() ?: return null
+
+        if (section.matchesBest) {
+            return "ВАШ ВАРИАНТ: " + SanRuFormatter.move(section.playedSan) +
+                System.lineSeparator() + "Это и есть лучший ход."
+        }
+
+        val title = "ВАШ ВАРИАНТ: " + SanRuFormatter.move(section.playedSan) + " — " +
+            classificationLabel(section.classification) + damageMark(section)
+        return title + System.lineSeparator() + comparisonBody(section, "Лучше", "Ваш ход")
+    }
+
     // ——— Шапка ———
 
     private fun header(explanation: PositionExplanation): String {
@@ -125,14 +161,44 @@ object TextRenderer {
         is Section.PositionAssessment -> "ОЦЕНКА ПОЗИЦИИ"
         is Section.MyPosition -> "МОЯ ПОЗИЦИЯ"
         is Section.MyAttack -> "МОЯ АТАКА"
-        is Section.Threat -> "УГРОЗА"
-        is Section.WhyThisMove -> "ЛУЧШИЙ ХОД: ${SanRuFormatter.move(section.moveSan)}"
+        is Section.WhyThisMove ->
+            "ЛУЧШИЙ ХОД: ${SanRuFormatter.move(section.moveSan)}${playedMatchMark(explanation)}"
         is Section.PlayedMove ->
-            "СЫГРАННЫЙ ХОД: ${SanRuFormatter.move(section.playedSan)} — ${classificationLabel(section.classification)}"
+            "СЫГРАННЫЙ ХОД: ${SanRuFormatter.move(section.playedSan)} — " +
+                classificationLabel(section.classification) + damageMark(section)
         is Section.Prophylaxis -> "ПРОФИЛАКТИКА"
-        is Section.Plan -> "ПЛАН"
         is Section.Trap -> "ЕСЛИ СЫГРАТЬ ИНАЧЕ"
         is Section.Alternatives -> "АЛЬТЕРНАТИВЫ"
+    }
+
+    /**
+     * Совпадение с сыгранным ходом отмечается прямо у лучшего хода.
+     *
+     * Отдельный раздел "СЫГРАННЫЙ ХОД: Nc3 — лучший" повторял бы тот же ход
+     * заголовком ниже, и читателю пришлось бы сличать две строки, чтобы понять,
+     * что речь об одном и том же.
+     */
+    private fun playedMatchMark(explanation: PositionExplanation): String =
+        if (explanation.section<Section.PlayedMove>()?.matchesBest == true) " (= сыгранный)" else ""
+
+    /**
+     * Чем именно плох ход — короткой вставкой прямо в заголовок.
+     *
+     * Ярлык "зевок" сам по себе ничего не объясняет: он сообщает оценку, а не
+     * причину. Причина берётся из фактов, появившихся у соперника после этого
+     * хода, и только если их нет — из падения оценки, которое известно всегда.
+     */
+    private fun damageMark(section: Section.PlayedMove): String {
+        if (section.classification != MoveClassification.BLUNDER &&
+            section.classification != MoveClassification.MISTAKE
+        ) {
+            return ""
+        }
+        val phrase = section.punishment
+            .sortedBy(::damageRank)
+            .firstNotNullOfOrNull { runCatching { damagePhrase(it) }.getOrNull() }
+            ?: lossPhrase(section.centipawnLoss)
+        return " ($phrase)"
     }
 
     private fun classificationLabel(classification: MoveClassification): String = when (classification) {
@@ -153,16 +219,11 @@ object TextRenderer {
         forkedSquares: Set<Square>,
     ): String? = when (section) {
         is Section.PositionAssessment -> positionAssessmentBody(section)
-        is Section.MyPosition -> myPositionBody(section, glossary, memory, forkedSquares)
+        is Section.MyPosition -> myPositionBody(section, pool, glossary, memory, forkedSquares)
         is Section.MyAttack -> myAttackBody(section, glossary, memory, forkedSquares)
-        is Section.Threat -> threatBody(section.threat, pool, glossary, memory, forkedSquares)
         is Section.WhyThisMove -> whyThisMoveBody(section, glossary, memory, forkedSquares)
-        is Section.PlayedMove -> playedMoveBody(section, glossary, memory, forkedSquares)
+        is Section.PlayedMove -> playedMoveBody(section, explanation)
         is Section.Prophylaxis -> prophylaxisBody(section.fact, pool)
-        // План — итог всего сказанного, поэтому он единственный освобождён от
-        // запрета на повтор: собранная в конце сводка обязана повторять то,
-        // что уже прозвучало, иначе она пустеет ровно там, где полезна.
-        is Section.Plan -> planBody(section, glossary, RenderMemory(), forkedSquares)
         is Section.Trap -> trapBody(section, explanation.sideToMove)
         is Section.Alternatives -> alternativesBody(section)
     }
@@ -171,6 +232,9 @@ object TextRenderer {
 
     private fun positionAssessmentBody(section: Section.PositionAssessment): String {
         val lines = mutableListOf<String>()
+        // Дебют первой строкой: он отвечает на вопрос "куда я вообще попал",
+        // а материал и характер позиции — уже на "как тут дела".
+        section.opening?.takeIf { it.isNotBlank() }?.let { lines += "Дебют: $it." }
         lines += materialAssessmentLine(section.materialCentipawns)
         lines += characterLine(section.character)
         ideasLine(section.ideas)?.let { lines += it }
@@ -212,7 +276,10 @@ object TextRenderer {
     private fun ideaPhrase(idea: StrategicIdea): String = when (idea) {
         StrategicIdea.ATTACK_KING -> "атаковать короля"
         StrategicIdea.FORCE_EXCHANGES -> "форсировать размены"
-        StrategicIdea.DEFEND -> "укрепить оборону короля"
+        // Не "укрепить оборону короля": пользователь справедливо спросил, что
+        // это значит. Идея должна называть действие, которое можно сделать
+        // следующим ходом, а не состояние, к которому надо стремиться.
+        StrategicIdea.DEFEND -> "подтянуть фигуры к своему королю"
         StrategicIdea.IMPROVE_PIECES -> "улучшать положение фигур"
         StrategicIdea.PUSH_PAWNS -> "двигать проходные пешки"
         StrategicIdea.SIMPLIFY_TO_ENDGAME -> "упрощать позицию и идти в эндшпиль"
@@ -222,45 +289,130 @@ object TextRenderer {
 
     // ——— МОЯ ПОЗИЦИЯ / МОЯ АТАКА ———
 
-    /** Раздел без единого факта не печатается вовсе — обе строки необязательны по отдельности. */
+    /**
+     * Все пункты печатаются всегда, даже пустые.
+     *
+     * "Мат: нет" — это ответ, а пропущенная строка выглядит так, будто тренер
+     * про мат забыл. Читателю нужен одинаковый список от позиции к позиции,
+     * иначе он не знает, что именно проверено, а что нет.
+     */
     private fun myPositionBody(
         section: Section.MyPosition,
+        pool: TemplatePool,
         glossary: Glossary,
         memory: RenderMemory,
         forkedSquares: Set<Square>,
-    ): String? {
-        val lines = mutableListOf<String>()
-        labelledLine("Безопасность короля", section.kingSafety, forkedSquares, glossary, memory)?.let { lines += it }
-        labelledLine("Защита от взятий", section.loosePieces, forkedSquares, glossary, memory)?.let { lines += it }
-        if (lines.isEmpty()) return null
-        return lines.joinToString(System.lineSeparator())
-    }
+    ): String = listOf(
+        labelledLine("Безопасность короля", section.kingSafety, forkedSquares, glossary, memory),
+        labelledLine("Защита от взятий", section.loosePieces, forkedSquares, glossary, memory),
+        threatLine(section.threat, pool, glossary, memory, forkedSquares),
+        planLine("План соперника", section.opponentPlan, glossary, forkedSquares, forOpponent = true),
+    ).joinToString(System.lineSeparator())
 
     private fun myAttackBody(
         section: Section.MyAttack,
         glossary: Glossary,
         memory: RenderMemory,
         forkedSquares: Set<Square>,
-    ): String? {
-        val lines = mutableListOf<String>()
-        labelledLine("Мат", section.mate, forkedSquares, glossary, memory)?.let { lines += it }
-        labelledLine("Взятия", section.captures, forkedSquares, glossary, memory)?.let { lines += it }
-        labelledLine("Активизация", section.activity, forkedSquares, glossary, memory)?.let { lines += it }
-        if (lines.isEmpty()) return null
-        return lines.joinToString(System.lineSeparator())
-    }
+    ): String = listOf(
+        labelledLine("Мат", section.mate, forkedSquares, glossary, memory),
+        labelledLine("Взятия", section.captures, forkedSquares, glossary, memory),
+        labelledLine("Активизация", section.activity, forkedSquares, glossary, memory),
+        planLine("Мой план", section.plan, glossary, forkedSquares, forOpponent = false),
+    ).joinToString(System.lineSeparator())
 
-    /** "{Метка}: {факты}." — либо ничего, если ни один факт не пережил дедупликацию и обрезку. */
     private fun labelledLine(
         label: String,
         facts: List<Fact>,
         forkedSquares: Set<Square>,
         glossary: Glossary,
         memory: RenderMemory,
-    ): String? {
-        val statements = statementsFor(facts, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON)
-        if (statements.isEmpty()) return null
-        return "$label: " + statements.joinToString(" ")
+    ): String = sentencesLine(label, statementsFor(facts, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON))
+
+    /**
+     * "{Метка}: {предложения}" одной строкой, либо "{Метка}: нет."
+     *
+     * Первая буква строчная: после двоеточия начинается не новое предложение, а
+     * продолжение строки, и заглавная там читается как опечатка.
+     */
+    private fun sentencesLine(label: String, sentences: List<String>): String {
+        if (sentences.isEmpty()) return "$label: нет."
+        return "$label: " + decapitalize(sentences.joinToString(" "))
+    }
+
+    /** Угроза живёт пунктом "моей позиции": это ответ на вопрос "что мне грозит", а не отдельная новость. */
+    private fun threatLine(
+        threat: ThreatFact?,
+        pool: TemplatePool,
+        glossary: Glossary,
+        memory: RenderMemory,
+        forkedSquares: Set<Square>,
+    ): String {
+        if (threat == null) return "Угроза: нет."
+
+        val parts = mutableListOf(pool.choose(threat, threatIntroTemplates))
+        if (threat.dropCentipawns >= CoachThresholds.THREAT_STRONG_CP) {
+            // Точку у шаблона снимаем и ставим заново после скобки: оценка
+            // "серьёзная" без масштаба — это интонация, а не информация, и
+            // читатель вправе спросить, насколько серьёзная.
+            val severity = pool.choose(threat, threatSeverityTemplates).removeSuffix(".")
+            parts += severity + " (" + threatScale(threat) + ")."
+        }
+        // Не любой факт, который сработал после хода соперника, объясняет, чем
+        // этот ход опасен: отсталая пешка или чужая подвижность тут ни при чём.
+        // Опасность — это то, что реально сыпется: материал, король, мат.
+        parts += statementsFor(
+            threat.consequences.filter { explainsDanger(it) },
+            forkedSquares,
+            glossary,
+            memory,
+            MAX_THREAT_CONSEQUENCES,
+        )
+
+        return sentencesLine("Угроза", parts)
+    }
+
+    /**
+     * Насколько велика угроза — словами, а не в сантипешках.
+     *
+     * Число просадки в тексте разбора не появляется никогда (см. контракт
+     * класса), но и молчать о масштабе нельзя: "угроза серьёзная" без меры
+     * звучит одинаково и когда теряется пешка, и когда ферзь. Меру даём
+     * привычной шахматисту шкалой — в фигурах.
+     */
+    private fun threatScale(threat: ThreatFact): String {
+        if (threat.evidence.engineLine?.score is Score.Mate) return "дело идёт к мату"
+        return when {
+            threat.dropCentipawns >= QUEEN_SCALE_CP -> "уровень ферзя"
+            threat.dropCentipawns >= ROOK_SCALE_CP -> "уровень ладьи"
+            threat.dropCentipawns >= MINOR_SCALE_CP -> "уровень лёгкой фигуры"
+            threat.dropCentipawns >= PAWN_MAGNITUDE_CP -> "больше пешки"
+            else -> "примерно пешка"
+        }
+    }
+
+    /**
+     * План — итог уже сказанного, поэтому он единственный освобождён от запрета
+     * на повтор: сводка обязана повторять то, что прозвучало выше, иначе она
+     * пустеет ровно там, где полезна. Отсюда своя, чистая [RenderMemory].
+     */
+    private fun planLine(
+        label: String,
+        steps: List<PlanStep>,
+        glossary: Glossary,
+        forkedSquares: Set<Square>,
+        forOpponent: Boolean,
+    ): String {
+        val memory = RenderMemory()
+        // Шаги с одной и той же идеей сливаем в одну фразу. Иначе план на три
+        // слабые пешки выглядит как заевшая пластинка: "Давить на слабую пешку
+        // соперника" трижды подряд, меняется только поле.
+        val sentences = steps
+            .groupBy { it.idea }
+            .mapNotNull { (idea, group) ->
+                planStepSentence(idea, group.flatMap { it.facts }, glossary, memory, forkedSquares, forOpponent)
+            }
+        return sentencesLine(label, sentences)
     }
 
     // ——— УГРОЗА ———
@@ -276,29 +428,6 @@ object TextRenderer {
         { "Это уже ощутимая потеря." },
         { "Терпеть такое нельзя." },
     )
-
-    private fun threatBody(
-        threat: ThreatFact,
-        pool: TemplatePool,
-        glossary: Glossary,
-        memory: RenderMemory,
-        forkedSquares: Set<Square>,
-    ): String = buildString {
-        append(pool.choose(threat, threatIntroTemplates))
-        if (threat.dropCentipawns >= CoachThresholds.THREAT_STRONG_CP) {
-            append(" ")
-            append(pool.choose(threat, threatSeverityTemplates))
-        }
-        // Не любой факт, который сработал в позиции после хода соперника,
-        // объясняет, чем этот ход опасен — отсталая пешка или собственная
-        // подвижность тут ни при чём. Опасность — это то, что реально
-        // сыпется: материал, король, мат.
-        val dangers = threat.consequences.filter { explainsDanger(it) }
-        statementsFor(dangers, forkedSquares, glossary, memory, MAX_THREAT_CONSEQUENCES).forEach {
-            append(" ")
-            append(it)
-        }
-    }
 
     private fun explainsDanger(fact: Fact): Boolean = when (fact) {
         is HangingPieceFact, is TrappedPieceFact, is ForkFact, is PinFact, is SkewerFact,
@@ -331,7 +460,49 @@ object TextRenderer {
             emptyList()
         }
 
-        return (numbered + caveat).joinToString(System.lineSeparator())
+        val opening = section.openingCaveat
+            ?.let { openingCaveatLines(it, section.reasons) }
+            ?: emptyList()
+
+        return (numbered + caveat + opening).joinToString(System.lineSeparator())
+    }
+
+    /**
+     * Оговорка про дебютное правило развития.
+     *
+     * Клубного игрока учат «каждой фигурой по разу, потом рокировка», и совет
+     * ходить той же фигурой второй раз выглядит как противоречие всему, что он
+     * знает. Непонятая рекомендация не выполняется, поэтому молчать тут нельзя —
+     * но и оправдывать ход нечем, кроме того, что уже сказано выше: выдумывать
+     * достоинства хода ради красивого объяснения запрещено.
+     */
+    private fun openingCaveatLines(caveat: OpeningCaveat, reasons: List<Reason>): List<String> {
+        val pieceName = PieceLexicon.name(pieceTypeOf(caveat.movedPiece))
+        val waiting = caveat.undevelopedSquares.map { square ->
+            val piece = caveat.evidence.pieceAt(square)
+            if (piece == null) sq(square) else PieceLexicon.name(pieceTypeOf(piece)) + " " + sq(square)
+        }
+
+        val pending = buildList {
+            if (waiting.isNotEmpty()) add(russianList(waiting) + " ещё не в игре")
+            if (caveat.castlingPending) add("рокировка не сделана")
+        }
+        if (pending.isEmpty()) return emptyList()
+
+        val weighty = setOf(ReasonTier.MATERIAL_TACTICS, ReasonTier.KING_SAFETY, ReasonTier.PROPHYLAXIS)
+        val justified = reasons.any { it.tier in weighty }
+
+        val verdict = if (justified) {
+            "Дебютное правило тут уступает конкретной выгоде, названной выше: она считается по материалу и безопасности короля, а правило — только общее напоминание."
+        } else {
+            "Чем это лучше развития и рокировки, признаки позиции не объясняют — смотрите вариант ниже."
+        }
+
+        return listOf(
+            "Оговорка: ходить в дебюте дважды одной фигурой не принято, а тут " +
+                russianList(pending) + " — " + pieceName + " с " + sq(caveat.from) + " идёт повторно. " +
+                verdict
+        )
     }
 
     /** Один-два самых весомых факта тира, а не все подряд — пункт должен звучать как фраза тренера, а не как список. */
@@ -349,15 +520,30 @@ object TextRenderer {
      * и это тоже полезная новость, а не пустое место — читателю важно увидеть,
      * что он не упустил ничего из того, что даёт лучший ход.
      */
-    private fun playedMoveBody(
-        section: Section.PlayedMove,
-        glossary: Glossary,
-        memory: RenderMemory,
-        forkedSquares: Set<Square>,
-    ): String {
-        if (section.matchesBest) return "Сыгран лучший ход."
+    private fun playedMoveBody(section: Section.PlayedMove, explanation: PositionExplanation): String? {
+        if (section.matchesBest) {
+            // Про совпадение уже сказано пометкой у заголовка лучшего хода —
+            // повторять это отдельным разделом значит заставить читателя
+            // сличать две строки, чтобы понять, что речь об одном ходе.
+            if (explanation.section<Section.WhyThisMove>() != null) return null
+            return "Сыгран лучший ход."
+        }
 
-        val betterLine = "Лучше было " + SanRuFormatter.move(section.bestSan) + "."
+        return comparisonBody(section, "Лучше было", "Сыгранный ход")
+    }
+
+    /**
+     * Сравнение хода с лучшим одним абзацем. [betterPrefix] и [subject]
+     * отличаются для хода из партии и для варианта, который человек набрал
+     * сам: "Лучше было Nc3" уместно про уже сыгранное, но про предложенный
+     * прямо сейчас вариант так не говорят.
+     */
+    private fun comparisonBody(
+        section: Section.PlayedMove,
+        betterPrefix: String,
+        subject: String,
+    ): String {
+        val betterLine = betterPrefix + " " + SanRuFormatter.move(section.bestSan) + "."
 
         // Упущенное называется своими словами, а не тем же предложением, что в
         // разделе про лучший ход. Дословный повтор глушится защитой от
@@ -379,12 +565,80 @@ object TextRenderer {
             .distinct()
             .take(MAX_FACTS_PER_REASON)
 
-        if (missedPhrases.isEmpty()) return betterLine
+        if (missedPhrases.isEmpty()) return betterLine + refutationSentence(section)
 
         // Запятые без союза: сама именная группа уже может содержать "и"
         // ("вилку на d1 и e2"), и обычное перечисление дало бы "и e2 и связку".
-        return betterLine + " Сыгранный ход упускает " + missedPhrases.joinToString(", ") + "."
+        return betterLine + " " + subject + " упускает " + missedPhrases.joinToString(", ") + "." +
+            refutationSentence(section)
     }
+
+    /**
+     * Чем соперник наказывает — только там, где есть за что.
+     *
+     * После хорошего хода лучший ответ соперника это просто продолжение партии,
+     * и подавать его как расплату значило бы пугать читателя на ровном месте.
+     */
+    private fun refutationSentence(section: Section.PlayedMove): String {
+        val reply = section.refutationSan ?: return ""
+        val punished = section.classification == MoveClassification.BLUNDER ||
+            section.classification == MoveClassification.MISTAKE ||
+            section.classification == MoveClassification.INACCURACY
+        if (!punished) return ""
+        return " Соперник отвечает " + SanRuFormatter.move(reply) + "."
+    }
+
+    /**
+     * Чем ход плох — именной группой, которая встаёт в скобки после ярлыка.
+     *
+     * Null для признаков, вред от которых не описывается коротко: про них лучше
+     * промолчать, чем выдумывать формулировку.
+     */
+    private fun damagePhrase(fact: Fact): String? = when (fact) {
+        is MateFact -> "пропускает мат в " + fact.movesToMate
+        is BackRankFact -> "подставляется под мат по последней горизонтали"
+        is ForkFact -> "попадает под вилку на " + russianList(fact.targets.map { sq(it) })
+        is PinFact -> "попадает под связку на " + sq(fact.pinned)
+        is SkewerFact -> "попадает под рентген на " + sq(fact.front)
+        is DiscoveredAttackFact -> "попадает под вскрытое нападение на " + sq(fact.target)
+        is OverloadedDefenderFact -> "перегружает защитника на " + sq(fact.defender)
+        is HangingPieceFact ->
+            "отдаёт " + PieceLexicon.name(pieceTypeOf(fact.piece), GrammaticalCase.ACCUSATIVE) +
+                " на " + sq(fact.square)
+
+        is TrappedPieceFact ->
+            "запирает " + PieceLexicon.name(pieceTypeOf(fact.piece), GrammaticalCase.ACCUSATIVE) +
+                " на " + sq(fact.square)
+
+        else -> null
+    }
+
+    /**
+     * Порядок, в котором стоит называть вред: сначала то, что заканчивает
+     * партию, потом крупный материал, и только затем мелочи. Список фактов
+     * приходит в порядке срабатывания детекторов, а он к тяжести отношения
+     * не имеет.
+     */
+    private fun damageRank(fact: Fact): Int = when {
+        fact is MateFact -> 0
+        fact is BackRankFact -> 1
+        fact is HangingPieceFact && fact.lossCentipawns >= HEAVY_LOSS_CP -> 2
+        fact is ForkFact -> 3
+        fact is SkewerFact -> 4
+        fact is DiscoveredAttackFact -> 5
+        fact is PinFact -> 6
+        fact is TrappedPieceFact -> 7
+        fact is HangingPieceFact -> 8
+        else -> 99
+    }
+
+    /** Запасная причина, когда признаки молчат: падение оценки известно всегда. */
+    private fun lossPhrase(centipawnLoss: Int): String =
+        if (centipawnLoss >= COLLAPSE_CP) {
+            "оценка рушится"
+        } else {
+            "оценка падает на " + String.format(Locale.ROOT, "%.1f", centipawnLoss / 100.0)
+        }
 
     /**
      * Чего лишился сыгранный ход — короткой именной группой в винительном
@@ -428,39 +682,27 @@ object TextRenderer {
 
     // ——— ПЛАН ———
 
-    private fun planBody(section: Section.Plan, glossary: Glossary, memory: RenderMemory, forkedSquares: Set<Square>): String? {
-        // Шаги с одной и той же идеей сливаем в одну строку. Иначе план на
-        // три слабые пешки выглядит как заевшая пластинка: "Давить на слабую
-        // пешку соперника" трижды подряд, меняется только поле.
-        val lines = section.steps
-            .groupBy { it.idea }
-            .mapNotNull { (idea, steps) ->
-                planStepSentence(idea, steps.flatMap { it.facts }, glossary, memory, forkedSquares)
-            }
-        if (lines.isEmpty()) return null
-        return lines.joinToString(System.lineSeparator())
-    }
-
     private fun planStepSentence(
         idea: PlanIdea,
         facts: List<Fact>,
         glossary: Glossary,
         memory: RenderMemory,
         forkedSquares: Set<Square>,
+        forOpponent: Boolean,
     ): String? {
         // План перечисляет цели, а не пересказывает признаки: три подряд
         // предложения "пешка на d5 изолирована" отличаются одним полем и
         // читаются как заевшая пластинка.
         val targets = facts.mapNotNull(::planTarget).distinct()
-        if (targets.size == facts.size && targets.size > 1) {
-            return planIdeaPhrase(idea, targets.size) + ": " + russianList(targets) + "."
+        if (targets.size == facts.size) {
+            return planIdeaPhrase(idea, targets.size, forOpponent) + ": " + russianList(targets) + "."
         }
 
         val statements = statementsFor(facts, forkedSquares, glossary, memory)
         if (statements.isEmpty()) return null
         // factStatement собирает самостоятельное предложение с заглавной буквы;
         // тут оно идёт придаточным после двоеточия, поэтому строчная уместнее.
-        return planIdeaPhrase(idea, statements.size) + ": " +
+        return planIdeaPhrase(idea, statements.size, forOpponent) + ": " +
             statements.joinToString(" ") { decapitalize(it) }
     }
 
@@ -478,8 +720,13 @@ object TextRenderer {
         else -> null
     }
 
-    /** [count] — сколько признаков попало в один шаг: от этого зависит число в фразе. */
-    private fun planIdeaPhrase(idea: PlanIdea, count: Int): String = when (idea) {
+    /**
+     * [count] — сколько признаков попало в один шаг: от этого зависит число в
+     * фразе. [forOpponent] переворачивает притяжательные слова: под заголовком
+     * "План соперника" фраза "давить на слабые пешки соперника" означала бы,
+     * что соперник давит сам на себя.
+     */
+    private fun planIdeaPhrase(idea: PlanIdea, count: Int, forOpponent: Boolean): String = when (idea) {
         PlanIdea.OCCUPY_OUTPOST ->
             if (count > 1) "Держать фигуры на форпостах" else "Держать фигуру на форпосте"
 
@@ -489,8 +736,12 @@ object TextRenderer {
         PlanIdea.ADVANCE_PASSED_PAWN ->
             if (count > 1) "Двигать проходные пешки вперёд" else "Двигать проходную пешку вперёд"
 
-        PlanIdea.TARGET_WEAK_PAWN ->
-            if (count > 1) "Давить на слабые пешки соперника" else "Давить на слабую пешку соперника"
+        PlanIdea.TARGET_WEAK_PAWN -> when {
+            forOpponent && count > 1 -> "Давить на мои слабые пешки"
+            forOpponent -> "Давить на мою слабую пешку"
+            count > 1 -> "Давить на слабые пешки соперника"
+            else -> "Давить на слабую пешку соперника"
+        }
 
         PlanIdea.ATTACK_KING -> "Продолжать давление на короля"
         PlanIdea.IMPROVE_WORST_PIECE -> "Улучшать положение худшей фигуры"
@@ -553,12 +804,16 @@ object TextRenderer {
     private fun collectAllFacts(explanation: PositionExplanation): List<Fact> = explanation.sections.flatMap { section ->
         when (section) {
             is Section.PositionAssessment -> emptyList()
-            is Section.MyPosition -> section.kingSafety + section.loosePieces
-            is Section.MyAttack -> section.mate + section.captures + section.activity
-            is Section.Threat -> section.threat.consequences
+            is Section.MyPosition ->
+                section.kingSafety + section.loosePieces +
+                    section.opponentPlan.flatMap { it.facts } +
+                    (section.threat?.consequences ?: emptyList())
+
+            is Section.MyAttack ->
+                section.mate + section.captures + section.activity + section.plan.flatMap { it.facts }
+
             is Section.WhyThisMove -> section.reasons.flatMap { it.facts }
-            is Section.PlayedMove -> section.missed
-            is Section.Plan -> section.steps.flatMap { it.facts }
+            is Section.PlayedMove -> section.missed + section.punishment
             is Section.Prophylaxis, is Section.Trap, is Section.Alternatives -> emptyList()
         }
     }
@@ -633,7 +888,7 @@ object TextRenderer {
         is HangingPieceFact -> {
             val gender = PieceLexicon.genderOf(pieceTypeOf(fact.piece))
             val name = capitalize(PieceLexicon.name(pieceTypeOf(fact.piece)))
-            "$name на ${sq(fact.square)} ${PieceLexicon.Agreements.LOST.agree(gender)}."
+            "$name на ${sq(fact.square)} ${PieceLexicon.Agreements.LOST.agree(gender)}${hangingReason(fact)}."
         }
 
         is TrappedPieceFact -> {
@@ -767,13 +1022,17 @@ object TextRenderer {
         }
 
         is DevelopmentFact -> {
-            val castling = if (fact.castled) "" else " Король ещё не рокирован."
+            // Сторону называем обязательно. Безличное "развитие отстаёт" под
+            // заголовком МОЯ АТАКА читается как рассказ о моих же бедах, хотя
+            // факт попал туда именно потому, что отстал соперник.
+            val side = capitalize(SideLexicon.name(fact.owner))
+            val castling = if (fact.castled) "" else " Король не рокирован."
             val undeveloped = if (fact.undeveloped.isEmpty()) {
                 ""
             } else {
                 " Не вышли в игру фигуры на ${russianList(fact.undeveloped.map { sq(it) })}."
             }
-            ("Развитие отстаёт.$castling$undeveloped").trim()
+            ("$side отстали в развитии.$castling$undeveloped").trim()
         }
 
         // Сторона — существительное множественного числа: "чёрные", а не
@@ -797,6 +1056,26 @@ object TextRenderer {
     }
 
     // ——— Мелкие помощники ———
+
+    /**
+     * Почему фигура потеряна — в скобках, сразу за приговором.
+     *
+     * "Конь на d5 потерян" без причины читается как каприз движка: проверить
+     * нечем, поверить не во что. "Бьёт пешка e4, защиты нет" человек проверяет
+     * глазами за секунду — и либо соглашается, либо видит, что тренер
+     * ошибается, что тоже полезно. Пусто, если нападающий не записан в
+     * доказательстве: выдумывать причину нельзя.
+     */
+    private fun hangingReason(fact: HangingPieceFact): String {
+        val attacker = fact.firstAttacker ?: return ""
+        val piece = fact.evidence.pieceAt(attacker) ?: return ""
+        val attackerName = PieceLexicon.name(pieceTypeOf(piece))
+        // "Защиты нет" и "размен не выручает" — разные вещи: во втором случае
+        // взять обратно есть чем, но размен всё равно проигран, и советовать
+        // "защити фигуру" было бы вредным советом.
+        val verdict = if (fact.defended) "размен не выручает" else "защиты нет"
+        return " (бьёт $attackerName ${sq(attacker)}, $verdict)"
+    }
 
     private fun pieceTypeOf(piece: Piece) =
         piece.pieceType ?: error("Факт ссылается на пустую клетку — так быть не должно")

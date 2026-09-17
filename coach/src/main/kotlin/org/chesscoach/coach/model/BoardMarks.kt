@@ -36,8 +36,8 @@ object BoardMarks {
 
         // Порядок важен: экран рисует в этом же порядке, и лучший ход должен
         // лечь поверх остальных, а не под ними.
-        explanation.section<Section.Threat>()?.let { section ->
-            move(section.threat.opponentMoveUci, ArrowStyle.THREAT)?.let(arrows::add)
+        explanation.section<Section.MyPosition>()?.threat?.let { threat ->
+            move(threat.opponentMoveUci, ArrowStyle.THREAT)?.let(arrows::add)
         }
 
         explanation.section<Section.WhyThisMove>()?.let { section ->

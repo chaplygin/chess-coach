@@ -29,6 +29,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import org.chesscoach.app.AppContainer
+import org.chesscoach.core.mapCatchingNonCancellation
 import org.chesscoach.core.MoveNotation
 import org.chesscoach.core.ScoreFormat
 import org.chesscoach.engine.AnalysisResult
@@ -72,7 +73,7 @@ fun EngineScreen(container: AppContainer, onBack: () -> Unit) {
         result = null
 
         container.engine.analyzer()
-            .mapCatching { it.analyze(preset.fen, SearchLimits(movetimeMs = 1500, multiPv = 3)) }
+            .mapCatchingNonCancellation { it.analyze(preset.fen, SearchLimits(movetimeMs = 1500, multiPv = 3)) }
             .onSuccess { result = it }
             .onFailure { error = "${it::class.java.simpleName}: ${it.message}" }
 

@@ -113,12 +113,15 @@ class RendererRobustnessTest {
         )
         val rook = knight.copy(piece = Piece.WHITE_ROOK)
 
-        val knightText = TextRenderer.render(explanationWith(Section.Plan(listOf(
-            PlanStep(PlanIdea.OCCUPY_OUTPOST, listOf(knight), Evidence.of(Square.D5)),
-        ))))
-        val rookText = TextRenderer.render(explanationWith(Section.Plan(listOf(
-            PlanStep(PlanIdea.OCCUPY_OUTPOST, listOf(rook), Evidence.of(Square.D5)),
-        ))))
+        // Через "Активизацию", а не через план: план перечисляет цели полями
+        // ("Держать фигуру на форпосте: d5."), и согласование местоимения там
+        // просто не встречается.
+        val knightText = TextRenderer.render(explanationWith(
+            Section.MyAttack(emptyList(), emptyList(), listOf(knight)),
+        ))
+        val rookText = TextRenderer.render(explanationWith(
+            Section.MyAttack(emptyList(), emptyList(), listOf(rook)),
+        ))
 
         assertTrue(knightText, knightText.contains("пешкой его оттуда не согнать"))
         assertTrue(rookText, rookText.contains("пешкой её оттуда не согнать"))

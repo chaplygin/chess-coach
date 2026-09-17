@@ -10,6 +10,8 @@ import org.chesscoach.coach.model.HangingPieceFact
 import org.chesscoach.coach.model.KingSafetyFact
 import org.chesscoach.coach.model.PositionCharacter
 import org.chesscoach.coach.model.PositionExplanation
+import org.chesscoach.coach.model.Reason
+import org.chesscoach.coach.model.ReasonTier
 import org.chesscoach.coach.model.Section
 import org.chesscoach.coach.model.StrategicIdea
 import org.chesscoach.core.MoveClassification
@@ -86,7 +88,7 @@ class TextRendererNewSectionsTest {
     // ——— МОЯ ПОЗИЦИЯ ———
 
     @Test
-    fun `my position with only king safety prints only that line`() {
+    fun `my position prints every item, the empty ones as no`() {
         val myKing = KingSafetyFact(
             king = Square.G8,
             kingSide = Side.BLACK,
@@ -98,16 +100,22 @@ class TextRendererNewSectionsTest {
         )
         val text = TextRenderer.render(explanation(listOf(Section.MyPosition(listOf(myKing), emptyList()))))
 
+        // Список пунктов одинаков от позиции к позиции: иначе читатель не
+        // знает, что тренер проверил, а что молча пропустил.
         assertTrue(text, text.contains("МОЯ ПОЗИЦИЯ"))
         assertTrue(text, text.contains("Безопасность короля:"))
-        assertFalse(text, text.contains("Защита от взятий:"))
+        assertTrue(text, text.contains("Защита от взятий: нет."))
+        assertTrue(text, text.contains("Угроза: нет."))
+        assertTrue(text, text.contains("План соперника: нет."))
     }
 
     @Test
-    fun `my position with nothing at all is not printed`() {
+    fun `my position with nothing at all still answers every item`() {
         val text = TextRenderer.render(explanation(listOf(Section.MyPosition(emptyList(), emptyList()))))
 
-        assertFalse(text, text.contains("МОЯ ПОЗИЦИЯ"))
+        assertTrue(text, text.contains("МОЯ ПОЗИЦИЯ"))
+        assertTrue(text, text.contains("Безопасность короля: нет."))
+        assertTrue(text, text.contains("Защита от взятий: нет."))
     }
 
     @Test
@@ -115,8 +123,9 @@ class TextRendererNewSectionsTest {
         val hanging = HangingPieceFact(Square.D3, Piece.BLACK_BISHOP, 300, Side.WHITE, Evidence.of(Square.D3))
         val text = TextRenderer.render(explanation(listOf(Section.MyPosition(emptyList(), listOf(hanging)))))
 
-        assertTrue(text, text.contains("Защита от взятий:"))
-        assertTrue(text, text.contains("Слон на d3 потерян"))
+        // После двоеточия строчная буква: это продолжение строки, а не новое
+        // предложение.
+        assertTrue(text, text.contains("Защита от взятий: слон на d3 потерян"))
     }
 
     // ——— МОЯ АТАКА ———
@@ -141,10 +150,14 @@ class TextRendererNewSectionsTest {
     }
 
     @Test
-    fun `my attack with nothing at all is not printed`() {
+    fun `my attack with nothing at all still answers every item`() {
         val text = TextRenderer.render(explanation(listOf(Section.MyAttack(emptyList(), emptyList(), emptyList()))))
 
-        assertFalse(text, text.contains("МОЯ АТАКА"))
+        assertTrue(text, text.contains("МОЯ АТАКА"))
+        assertTrue(text, text.contains("Мат: нет."))
+        assertTrue(text, text.contains("Взятия: нет."))
+        assertTrue(text, text.contains("Активизация: нет."))
+        assertTrue(text, text.contains("Мой план: нет."))
     }
 
     // ——— СЫГРАННЫЙ ХОД ———
@@ -162,8 +175,34 @@ class TextRendererNewSectionsTest {
         )
         val text = TextRenderer.render(explanation(listOf(section)))
 
-        assertTrue(text, text.contains("СЫГРАННЫЙ ХОД: Лfe8 — лучший"))
+        assertTrue(text, text.contains("СЫГРАННЫЙ ХОД: Rfe8 — лучший"))
         assertTrue(text, text.contains("Сыгран лучший ход."))
+    }
+
+    @Test
+    fun `the played move that equals the best is marked at the best move, not repeated below`() {
+        val best = Section.WhyThisMove(
+            moveSan = "Rfe8",
+            reasons = listOf(
+                Reason(
+                    ReasonTier.MATERIAL_TACTICS,
+                    listOf(HangingPieceFact(Square.D3, Piece.BLACK_BISHOP, 300, Side.WHITE, Evidence.of(Square.D3))),
+                ),
+            ),
+        )
+        val played = Section.PlayedMove(
+            playedSan = "Rfe8",
+            playedUci = "f8e8",
+            bestSan = "Rfe8",
+            bestUci = "f8e8",
+            classification = MoveClassification.BEST,
+            centipawnLoss = 0,
+            missed = emptyList(),
+        )
+        val text = TextRenderer.render(explanation(listOf(best, played)))
+
+        assertTrue(text, text.contains("ЛУЧШИЙ ХОД: Rfe8 (= сыгранный)"))
+        assertFalse(text, text.contains("СЫГРАННЫЙ ХОД"))
     }
 
     @Test
