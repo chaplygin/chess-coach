@@ -20,8 +20,19 @@ enum class Gender { MASCULINE, FEMININE }
  */
 enum class GrammaticalCase { NOMINATIVE, ACCUSATIVE, GENITIVE, DATIVE, INSTRUMENTAL }
 
-/** Склонение одной фигуры по падежам. */
-data class PieceWord(val gender: Gender, private val forms: Map<GrammaticalCase, String>) {
+/**
+ * Склонение одной фигуры по падежам.
+ *
+ * [genitivePlural] нужен для счёта: по-русски после двух, трёх и четырёх идёт
+ * родительный единственного ("две пешки"), а после пяти и дальше —
+ * родительный множественного ("пять пешек"). Без отдельной формы тренер
+ * написал бы "пять пешки", и это заметит любой читатель.
+ */
+data class PieceWord(
+    val gender: Gender,
+    private val forms: Map<GrammaticalCase, String>,
+    val genitivePlural: String,
+) {
     fun case(case: GrammaticalCase): String = forms.getValue(case)
 }
 
@@ -58,6 +69,7 @@ object PieceLexicon {
             GrammaticalCase.DATIVE to "королю",
             GrammaticalCase.INSTRUMENTAL to "королём",
         ),
+        genitivePlural = "королей",
     )
 
     private val queen = PieceWord(
@@ -69,6 +81,7 @@ object PieceLexicon {
             GrammaticalCase.DATIVE to "ферзю",
             GrammaticalCase.INSTRUMENTAL to "ферзём",
         ),
+        genitivePlural = "ферзей",
     )
 
     private val rook = PieceWord(
@@ -80,6 +93,7 @@ object PieceLexicon {
             GrammaticalCase.DATIVE to "ладье",
             GrammaticalCase.INSTRUMENTAL to "ладьёй",
         ),
+        genitivePlural = "ладей",
     )
 
     private val bishop = PieceWord(
@@ -91,6 +105,7 @@ object PieceLexicon {
             GrammaticalCase.DATIVE to "слону",
             GrammaticalCase.INSTRUMENTAL to "слоном",
         ),
+        genitivePlural = "слонов",
     )
 
     private val knight = PieceWord(
@@ -102,6 +117,7 @@ object PieceLexicon {
             GrammaticalCase.DATIVE to "коню",
             GrammaticalCase.INSTRUMENTAL to "конём",
         ),
+        genitivePlural = "коней",
     )
 
     private val pawn = PieceWord(
@@ -113,6 +129,7 @@ object PieceLexicon {
             GrammaticalCase.DATIVE to "пешке",
             GrammaticalCase.INSTRUMENTAL to "пешкой",
         ),
+        genitivePlural = "пешек",
     )
 
     fun word(type: PieceType): PieceWord = when (type) {
@@ -131,6 +148,39 @@ object PieceLexicon {
 
     fun genderOf(type: PieceType): Gender = word(type).gender
 
+    /**
+     * Фигура с числом: "пешка", "две пешки", "пять пешек".
+     *
+     * Русский счёт требует трёх разных форм, и написать "2 пешки" цифрой было
+     * бы проще, но в тексте тренера цифра посреди фразы выглядит как опечатка.
+     * Числительное согласуется по роду: "две пешки", но "два коня".
+     */
+    fun counted(type: PieceType, count: Int): String {
+        val word = word(type)
+        if (count == 1) return word.case(GrammaticalCase.NOMINATIVE)
+
+        val numeral = numeral(count, word.gender)
+        // Разница в материале больше восьми фигур одного вида невозможна, но
+        // если такое придёт — лучше показать цифру, чем промолчать.
+        val noun = if (count in 2..4) word.case(GrammaticalCase.GENITIVE) else word.genitivePlural
+        return "$numeral $noun"
+    }
+
+    /** Определение "лишний" в нужной форме: род важен только в единственном числе. */
+    fun spare(type: PieceType, count: Int): String =
+        if (count == 1) Agreements.SPARE.agree(genderOf(type)) else "лишние"
+
+    private fun numeral(count: Int, gender: Gender): String = when (count) {
+        2 -> if (gender == Gender.FEMININE) "две" else "два"
+        3 -> "три"
+        4 -> "четыре"
+        5 -> "пять"
+        6 -> "шесть"
+        7 -> "семь"
+        8 -> "восемь"
+        else -> count.toString()
+    }
+
     /** Слова, которыми детекторы описывают судьбу фигуры — согласуются по роду фигуры, а не зашиты в текст. */
     object Agreements {
         val LOST = AgreeingWord(masculine = "потерян", feminine = "потеряна")
@@ -139,6 +189,7 @@ object PieceLexicon {
         val PINNED_SHORT = AgreeingWord(masculine = "связан", feminine = "связана")
         val OVERLOADED_ADJECTIVE = AgreeingWord(masculine = "перегруженный", feminine = "перегруженная")
         val MUST_COVER = AgreeingWord(masculine = "должен", feminine = "должна")
+        val SPARE = AgreeingWord(masculine = "лишний", feminine = "лишняя")
     }
 }
 

@@ -44,12 +44,12 @@ class TextRendererNewSectionsTest {
 
     @Test
     fun `a level material balance is stated plainly rather than passed over`() {
-        val section = Section.PositionAssessment(materialCentipawns = 10, character = PositionCharacter.OPEN, ideas = emptyList())
+        val section = Section.PositionAssessment(materialCentipawns = 0, character = PositionCharacter.OPEN, ideas = emptyList())
         val text = TextRenderer.render(explanation(listOf(section)))
 
         // Молчание про материал читатель примет за недосмотр, а не за
         // "считать нечего": это первый вопрос, который он задаёт.
-        assertTrue(text, text.contains("Материал: равный."))
+        assertTrue(text, text.contains("Материал: равный (0.0)."))
         assertTrue(text, text.contains("Позиция открытая"))
     }
 

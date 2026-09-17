@@ -69,7 +69,8 @@ object PositionAssessor {
         opening: String? = null,
     ): Section.PositionAssessment {
         val board = Board()
-        val character = if (runCatching { board.loadFromFen(fen) }.isSuccess) {
+        val boardLoaded = runCatching { board.loadFromFen(fen) }.isSuccess
+        val character = if (boardLoaded) {
             characterOf(board)
         } else {
             // Без доски по-честному характер позиции не определить — но раздел
@@ -82,7 +83,29 @@ object PositionAssessor {
             character = character,
             ideas = ideasFor(features, mover, character),
             opening = opening,
+            pieceDifference = if (boardLoaded) pieceDifference(board) else emptyMap(),
         )
+    }
+
+    /**
+     * Сколько фигур каждого вида лишних у белых (минус — у чёрных).
+     *
+     * Считается по доске, а не выводится из сантипешек: из одного числа
+     * "плюс 200" нельзя понять, две это лишние пешки или лишний конь против
+     * пешки, а разница между этими случаями на доске огромная.
+     */
+    private fun pieceDifference(board: Board): Map<PieceType, Int> {
+        val counted = listOf(
+            PieceType.QUEEN,
+            PieceType.ROOK,
+            PieceType.BISHOP,
+            PieceType.KNIGHT,
+            PieceType.PAWN,
+        )
+        return counted.associateWith { type ->
+            board.getPieceLocation(Piece.make(Side.WHITE, type)).size -
+                board.getPieceLocation(Piece.make(Side.BLACK, type)).size
+        }.filterValues { it != 0 }
     }
 
     private fun characterOf(board: Board): PositionCharacter {

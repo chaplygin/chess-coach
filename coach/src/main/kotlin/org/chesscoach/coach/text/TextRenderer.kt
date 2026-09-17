@@ -1,6 +1,7 @@
 package org.chesscoach.coach.text
 
 import com.github.bhlangonijr.chesslib.Piece
+import com.github.bhlangonijr.chesslib.PieceType
 import com.github.bhlangonijr.chesslib.Side
 import com.github.bhlangonijr.chesslib.Square
 import org.chesscoach.coach.model.BackRankFact
@@ -77,6 +78,15 @@ object TextRenderer {
 
     /** В угрозе — сам ход соперника и не больше двух следствий, объясняющих опасность. */
     private const val MAX_THREAT_CONSEQUENCES = 2
+
+    /** Разбирать материал начинаем со старших фигур: лишний ферзь важнее лишней пешки. */
+    private val MATERIAL_ORDER = listOf(
+        PieceType.QUEEN,
+        PieceType.ROOK,
+        PieceType.BISHOP,
+        PieceType.KNIGHT,
+        PieceType.PAWN,
+    )
 
     /** Потеря от фигуры и выше: такой зевок называем раньше любой тактики помельче. */
     private const val HEAVY_LOSS_CP = 300
@@ -235,7 +245,7 @@ object TextRenderer {
         // Дебют первой строкой: он отвечает на вопрос "куда я вообще попал",
         // а материал и характер позиции — уже на "как тут дела".
         section.opening?.takeIf { it.isNotBlank() }?.let { lines += "Дебют: $it." }
-        lines += materialAssessmentLine(section.materialCentipawns)
+        lines += materialAssessmentLine(section)
         lines += characterLine(section.character)
         ideasLine(section.ideas)?.let { lines += it }
         return lines.joinToString(System.lineSeparator())
@@ -247,19 +257,62 @@ object TextRenderer {
      * "Материал равный" — это не пустая фраза, а ответ на вопрос, который
      * читатель задаёт первым. Молчание он прочтёт как недосмотр, а не как
      * "считать нечего".
+     *
+     * Словесная оценка ("заметный перевес") тут больше не нужна и даже вредна:
+     * она уже однажды разошлась с доской, объявив заметным перевесом лишнюю
+     * пешку. Перечень фигур и число в пешках проверяются глазами, а
+     * "заметный" — нет.
      */
-    private fun materialAssessmentLine(centipawnsFromWhite: Int): String {
-        if (kotlin.math.abs(centipawnsFromWhite) < CoachThresholds.MATERIAL_NOTE_CP) {
-            return "Материал: равный."
+    private fun materialAssessmentLine(section: Section.PositionAssessment): String {
+        val score = pawnsLabel(section.materialCentipawns)
+        val parts = listOfNotNull(
+            surplusPhrase(section.pieceDifference, Side.WHITE),
+            surplusPhrase(section.pieceDifference, Side.BLACK),
+        )
+
+        if (parts.isEmpty()) {
+            // Перечня нет, а число есть — так бывает только если доску не
+            // удалось прочитать. Называть это равенством нельзя: слова
+            // противоречили бы числу в той же строке.
+            if (kotlin.math.abs(section.materialCentipawns) >= CoachThresholds.MATERIAL_NOTE_CP) {
+                val side = if (section.materialCentipawns > 0) Side.WHITE else Side.BLACK
+                return "Материал: перевес у " + SideLexicon.name(side, GrammaticalCase.GENITIVE) + " ($score)."
+            }
+            return "Материал: равный ($score)."
         }
-        val side = SideLexicon.name(if (centipawnsFromWhite > 0) Side.WHITE else Side.BLACK, GrammaticalCase.GENITIVE)
-        val magnitude = kotlin.math.abs(centipawnsFromWhite)
-        val phrase = when {
-            magnitude <= PAWN_MAGNITUDE_CP -> "лишняя пешка"
-            magnitude <= EXCHANGE_MAGNITUDE_CP -> "лишнее качество"
-            else -> null
-        }
-        return if (phrase != null) "Материал: у $side $phrase." else "Материал: заметный перевес у $side."
+        return "Материал: " + parts.joinToString(", ") + " ($score)."
+    }
+
+    /**
+     * Баланс в пешках со знаком: плюс — за белых, минус — за чёрных.
+     *
+     * Locale.ROOT обязателен: на русском устройстве формат по умолчанию даёт
+     * запятую, и "+1,0" рядом с оценкой "+1.0" в шапке выглядит как две разные
+     * величины.
+     */
+    private fun pawnsLabel(centipawnsFromWhite: Int): String {
+        if (centipawnsFromWhite == 0) return "0.0"
+        return String.format(Locale.ROOT, "%+.1f", centipawnsFromWhite / 100.0)
+    }
+
+    /** "у белых лишние ладья и две пешки" — либо null, если у этой стороны лишнего нет. */
+    private fun surplusPhrase(difference: Map<PieceType, Int>, side: Side): String? {
+        val sign = if (side == Side.WHITE) 1 else -1
+        // Порядок от старшей фигуры к младшей: сначала важное.
+        val items = MATERIAL_ORDER
+            .mapNotNull { type ->
+                val count = (difference[type] ?: 0) * sign
+                if (count > 0) type to count else null
+            }
+        if (items.isEmpty()) return null
+
+        // Множественное число решает ОБЩЕЕ количество лишних фигур, а не
+        // количество первой из них: "лишняя ладья и пешка" — это две фигуры,
+        // и определение при них обязано быть во множественном числе.
+        val total = items.sumOf { (_, count) -> count }
+        val spare = PieceLexicon.spare(items.first().first, total)
+        val listed = items.joinToString(" и ") { (type, count) -> PieceLexicon.counted(type, count) }
+        return "у " + SideLexicon.name(side, GrammaticalCase.GENITIVE) + " " + spare + " " + listed
     }
 
     private fun characterLine(character: PositionCharacter): String = when (character) {

@@ -1,6 +1,7 @@
 package org.chesscoach.coach.text
 
 import com.github.bhlangonijr.chesslib.Piece
+import com.github.bhlangonijr.chesslib.PieceType
 import com.github.bhlangonijr.chesslib.Side
 import com.github.bhlangonijr.chesslib.Square
 import org.chesscoach.coach.model.CenterControlFact
@@ -258,39 +259,60 @@ class TextRendererEditorialTest {
     // ——— Величина материального перевеса соразмерна словам (пункт 7 правки) ———
 
     @Test
-    fun `a pawn-sized imbalance is called an extra pawn, not a vague material edge`() {
+    fun `a pawn-sized imbalance names the pawn and the balance in pawns`() {
         val section = org.chesscoach.coach.model.Section.PositionAssessment(
-            materialCentipawns = -110,
+            materialCentipawns = -100,
             character = org.chesscoach.coach.model.PositionCharacter.SEMI_OPEN,
             ideas = emptyList(),
+            pieceDifference = mapOf(PieceType.PAWN to -1),
         )
         val text = TextRenderer.render(explanation(listOf(section)))
 
-        assertTrue(text, text.contains("Материал: у чёрных лишняя пешка."))
+        assertTrue(text, text.contains("Материал: у чёрных лишняя пешка (-1.0)."))
     }
 
     @Test
-    fun `an exchange-sized imbalance is called an extra exchange`() {
+    fun `an uneven exchange names what each side has instead of a single verdict`() {
         val section = org.chesscoach.coach.model.Section.PositionAssessment(
-            materialCentipawns = 200,
+            materialCentipawns = 180,
             character = org.chesscoach.coach.model.PositionCharacter.SEMI_OPEN,
             ideas = emptyList(),
+            pieceDifference = mapOf(PieceType.ROOK to 1, PieceType.KNIGHT to -1),
         )
         val text = TextRenderer.render(explanation(listOf(section)))
 
-        assertTrue(text, text.contains("Материал: у белых лишнее качество."))
+        // Именно это "заметный перевес" и скрывал: качество — это размен
+        // ладьи на лёгкую фигуру, а не просто плюс два.
+        assertTrue(text, text.contains("Материал: у белых лишняя ладья, у чёрных лишний конь (+1.8)."))
     }
 
     @Test
-    fun `a piece-or-more imbalance keeps the general noticeable material edge wording`() {
+    fun `several pieces of one kind are counted grammatically`() {
+        val two = org.chesscoach.coach.model.Section.PositionAssessment(
+            materialCentipawns = -200,
+            character = org.chesscoach.coach.model.PositionCharacter.SEMI_OPEN,
+            ideas = emptyList(),
+            pieceDifference = mapOf(PieceType.PAWN to -2),
+        )
+        val five = two.copy(materialCentipawns = -500, pieceDifference = mapOf(PieceType.PAWN to -5))
+
+        assertTrue(TextRenderer.render(explanation(listOf(two))).contains("лишние две пешки"))
+        // После пяти — родительный множественного: "пять пешек", а не "пять пешки".
+        assertTrue(TextRenderer.render(explanation(listOf(five))).contains("лишние пять пешек"))
+    }
+
+    @Test
+    fun `a big edge names the pieces rather than calling it noticeable`() {
         val section = org.chesscoach.coach.model.Section.PositionAssessment(
             materialCentipawns = -600,
             character = org.chesscoach.coach.model.PositionCharacter.SEMI_OPEN,
             ideas = emptyList(),
+            pieceDifference = mapOf(PieceType.ROOK to -1, PieceType.PAWN to -1),
         )
         val text = TextRenderer.render(explanation(listOf(section)))
 
-        assertTrue(text, text.contains("Материал: заметный перевес у чёрных."))
+        assertTrue(text, text.contains("Материал: у чёрных лишние ладья и пешка (-6.0)."))
+        assertFalse(text, text.contains("заметный перевес"))
     }
 
     // ——— Свой и чужой король не путаются (пункт 9 правки) ———
