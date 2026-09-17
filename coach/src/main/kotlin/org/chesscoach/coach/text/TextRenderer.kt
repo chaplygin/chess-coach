@@ -26,11 +26,13 @@ import org.chesscoach.coach.model.PawnWeaknessKind
 import org.chesscoach.coach.model.PinFact
 import org.chesscoach.coach.model.PlanIdea
 import org.chesscoach.coach.model.PlanStep
+import org.chesscoach.coach.model.PositionCharacter
 import org.chesscoach.coach.model.PositionExplanation
 import org.chesscoach.coach.model.ProphylaxisFact
 import org.chesscoach.coach.model.Reason
 import org.chesscoach.coach.model.Section
 import org.chesscoach.coach.model.SkewerFact
+import org.chesscoach.coach.model.StrategicIdea
 import org.chesscoach.coach.model.ThreatFact
 import org.chesscoach.coach.model.TrappedPieceFact
 import org.chesscoach.core.MoveClassification
@@ -120,24 +122,25 @@ object TextRenderer {
     // ——— Заголовки и тела разделов ———
 
     private fun titleOf(section: Section, explanation: PositionExplanation): String = when (section) {
+        is Section.PositionAssessment -> "ОЦЕНКА ПОЗИЦИИ"
+        is Section.MyPosition -> "МОЯ ПОЗИЦИЯ"
+        is Section.MyAttack -> "МОЯ АТАКА"
         is Section.Threat -> "УГРОЗА"
-        is Section.WhyThisMove -> bestMoveTitle(section, explanation)
+        is Section.WhyThisMove -> "ЛУЧШИЙ ХОД: ${SanRuFormatter.move(section.moveSan)}"
+        is Section.PlayedMove ->
+            "СЫГРАННЫЙ ХОД: ${SanRuFormatter.move(section.playedSan)} — ${classificationLabel(section.classification)}"
         is Section.Prophylaxis -> "ПРОФИЛАКТИКА"
         is Section.Plan -> "ПЛАН"
         is Section.Trap -> "ЕСЛИ СЫГРАТЬ ИНАЧЕ"
         is Section.Alternatives -> "АЛЬТЕРНАТИВЫ"
-        is Section.ExpectedContinuation -> "ЧТО БУДЕТ ДАЛЬШЕ"
-        is Section.KingSafetyNote -> "БЕЗОПАСНОСТЬ КОРОЛЯ"
-        is Section.MaterialNote -> "МАТЕРИАЛ"
     }
 
-    private fun bestMoveTitle(section: Section.WhyThisMove, explanation: PositionExplanation): String {
-        val label = if (explanation.playedMoveSan == null || explanation.playedMoveSan == section.moveSan) {
-            "ЛУЧШИЙ ХОД"
-        } else {
-            "СЫГРАННЫЙ ХОД"
-        }
-        return "$label: ${SanRuFormatter.move(section.moveSan)}"
+    private fun classificationLabel(classification: MoveClassification): String = when (classification) {
+        MoveClassification.BEST -> "лучший"
+        MoveClassification.GOOD -> "хорошо"
+        MoveClassification.INACCURACY -> "неточность"
+        MoveClassification.MISTAKE -> "ошибка"
+        MoveClassification.BLUNDER -> "зевок"
     }
 
     /** Раздел без фактов не печатается вовсе — ни заголовка, ни фразы-заполнителя. */
@@ -149,19 +152,115 @@ object TextRenderer {
         memory: RenderMemory,
         forkedSquares: Set<Square>,
     ): String? = when (section) {
+        is Section.PositionAssessment -> positionAssessmentBody(section)
+        is Section.MyPosition -> myPositionBody(section, glossary, memory, forkedSquares)
+        is Section.MyAttack -> myAttackBody(section, glossary, memory, forkedSquares)
         is Section.Threat -> threatBody(section.threat, pool, glossary, memory, forkedSquares)
         is Section.WhyThisMove -> whyThisMoveBody(section, glossary, memory, forkedSquares)
+        is Section.PlayedMove -> playedMoveBody(section, glossary, memory, forkedSquares)
         is Section.Prophylaxis -> prophylaxisBody(section.fact, pool)
-        is Section.Plan -> planBody(section, glossary, memory, forkedSquares)
+        // План — итог всего сказанного, поэтому он единственный освобождён от
+        // запрета на повтор: собранная в конце сводка обязана повторять то,
+        // что уже прозвучало, иначе она пустеет ровно там, где полезна.
+        is Section.Plan -> planBody(section, glossary, RenderMemory(), forkedSquares)
         is Section.Trap -> trapBody(section, explanation.sideToMove)
         is Section.Alternatives -> alternativesBody(section)
-        is Section.ExpectedContinuation -> continuationBody(section, explanation)
-        // Тот же факт мог уже прозвучать раньше в этом же разборе (например,
-        // в причинах хода) — тогда statementsFor молча его пропустит, и весь
-        // раздел останется без текста: это не ошибка, а и есть требование не
-        // повторяться между разделами.
-        is Section.KingSafetyNote -> statementsFor(listOf(section.fact), forkedSquares, glossary, memory).firstOrNull()
-        is Section.MaterialNote -> materialBody(section)
+    }
+
+    // ——— ОЦЕНКА ПОЗИЦИИ ———
+
+    private fun positionAssessmentBody(section: Section.PositionAssessment): String {
+        val lines = mutableListOf<String>()
+        lines += materialAssessmentLine(section.materialCentipawns)
+        lines += characterLine(section.character)
+        ideasLine(section.ideas)?.let { lines += it }
+        return lines.joinToString(System.lineSeparator())
+    }
+
+    /**
+     * Строка про материал есть всегда, в том числе при равенстве.
+     *
+     * "Материал равный" — это не пустая фраза, а ответ на вопрос, который
+     * читатель задаёт первым. Молчание он прочтёт как недосмотр, а не как
+     * "считать нечего".
+     */
+    private fun materialAssessmentLine(centipawnsFromWhite: Int): String {
+        if (kotlin.math.abs(centipawnsFromWhite) < CoachThresholds.MATERIAL_NOTE_CP) {
+            return "Материал: равный."
+        }
+        val side = SideLexicon.name(if (centipawnsFromWhite > 0) Side.WHITE else Side.BLACK, GrammaticalCase.GENITIVE)
+        val magnitude = kotlin.math.abs(centipawnsFromWhite)
+        val phrase = when {
+            magnitude <= PAWN_MAGNITUDE_CP -> "лишняя пешка"
+            magnitude <= EXCHANGE_MAGNITUDE_CP -> "лишнее качество"
+            else -> null
+        }
+        return if (phrase != null) "Материал: у $side $phrase." else "Материал: заметный перевес у $side."
+    }
+
+    private fun characterLine(character: PositionCharacter): String = when (character) {
+        PositionCharacter.OPEN -> "Позиция открытая: фигурам есть где развернуться."
+        PositionCharacter.CLOSED -> "Позиция закрытая: пешечные цепи сцеплены, играть приходится вокруг них."
+        PositionCharacter.SEMI_OPEN -> "Позиция полуоткрытая: не нараспашку, но и не заперта наглухо."
+    }
+
+    private fun ideasLine(ideas: List<StrategicIdea>): String? {
+        if (ideas.isEmpty()) return null
+        return "Идея: " + ideas.joinToString(", ") { ideaPhrase(it) } + "."
+    }
+
+    private fun ideaPhrase(idea: StrategicIdea): String = when (idea) {
+        StrategicIdea.ATTACK_KING -> "атаковать короля"
+        StrategicIdea.FORCE_EXCHANGES -> "форсировать размены"
+        StrategicIdea.DEFEND -> "укрепить оборону короля"
+        StrategicIdea.IMPROVE_PIECES -> "улучшать положение фигур"
+        StrategicIdea.PUSH_PAWNS -> "двигать проходные пешки"
+        StrategicIdea.SIMPLIFY_TO_ENDGAME -> "упрощать позицию и идти в эндшпиль"
+        StrategicIdea.OPEN_THE_POSITION -> "вскрывать позицию"
+        StrategicIdea.KEEP_IT_CLOSED -> "держать позицию закрытой"
+    }
+
+    // ——— МОЯ ПОЗИЦИЯ / МОЯ АТАКА ———
+
+    /** Раздел без единого факта не печатается вовсе — обе строки необязательны по отдельности. */
+    private fun myPositionBody(
+        section: Section.MyPosition,
+        glossary: Glossary,
+        memory: RenderMemory,
+        forkedSquares: Set<Square>,
+    ): String? {
+        val lines = mutableListOf<String>()
+        labelledLine("Безопасность короля", section.kingSafety, forkedSquares, glossary, memory)?.let { lines += it }
+        labelledLine("Защита от взятий", section.loosePieces, forkedSquares, glossary, memory)?.let { lines += it }
+        if (lines.isEmpty()) return null
+        return lines.joinToString(System.lineSeparator())
+    }
+
+    private fun myAttackBody(
+        section: Section.MyAttack,
+        glossary: Glossary,
+        memory: RenderMemory,
+        forkedSquares: Set<Square>,
+    ): String? {
+        val lines = mutableListOf<String>()
+        labelledLine("Мат", section.mate, forkedSquares, glossary, memory)?.let { lines += it }
+        labelledLine("Взятия", section.captures, forkedSquares, glossary, memory)?.let { lines += it }
+        labelledLine("Активизация", section.activity, forkedSquares, glossary, memory)?.let { lines += it }
+        if (lines.isEmpty()) return null
+        return lines.joinToString(System.lineSeparator())
+    }
+
+    /** "{Метка}: {факты}." — либо ничего, если ни один факт не пережил дедупликацию и обрезку. */
+    private fun labelledLine(
+        label: String,
+        facts: List<Fact>,
+        forkedSquares: Set<Square>,
+        glossary: Glossary,
+        memory: RenderMemory,
+    ): String? {
+        val statements = statementsFor(facts, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON)
+        if (statements.isEmpty()) return null
+        return "$label: " + statements.joinToString(" ")
     }
 
     // ——— УГРОЗА ———
@@ -208,7 +307,7 @@ object TextRenderer {
         else -> false
     }
 
-    // ——— ЛУЧШИЙ ХОД / СЫГРАННЫЙ ХОД ———
+    // ——— ЛУЧШИЙ ХОД ———
 
     private fun whyThisMoveBody(
         section: Section.WhyThisMove,
@@ -240,6 +339,81 @@ object TextRenderer {
         val sentences = statementsFor(reason.facts, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON)
         if (sentences.isEmpty()) return null
         return sentences.joinToString(" ")
+    }
+
+    // ——— СЫГРАННЫЙ ХОД ———
+
+    /**
+     * Сравнение сыгранного хода с лучшим. Если ходы совпали, [Section.PlayedMove.missed]
+     * пуст по построению (см. [org.chesscoach.coach.analysis.PipelineOrchestrator]),
+     * и это тоже полезная новость, а не пустое место — читателю важно увидеть,
+     * что он не упустил ничего из того, что даёт лучший ход.
+     */
+    private fun playedMoveBody(
+        section: Section.PlayedMove,
+        glossary: Glossary,
+        memory: RenderMemory,
+        forkedSquares: Set<Square>,
+    ): String {
+        if (section.matchesBest) return "Сыгран лучший ход."
+
+        val betterLine = "Лучше было " + SanRuFormatter.move(section.bestSan) + "."
+
+        // Упущенное называется своими словами, а не тем же предложением, что в
+        // разделе про лучший ход. Дословный повтор глушится защитой от
+        // повторов — и раздел, ради которого разбор и читают, остался бы без
+        // главного: чем именно сыгранный ход хуже.
+        // Вилка поглощает перечисление своих же целей: сказать "упускает вилку
+        // и заодно две фигуры на тех же полях" значит трижды назвать одно.
+        val forkTargets = section.missed
+            .filterIsInstance<ForkFact>()
+            .flatMap { it.targets }
+            .toSet()
+
+        val missedPhrases = section.missed
+            .filterNot {
+                (it is HangingPieceFact && it.square in forkTargets) ||
+                    (it is TrappedPieceFact && it.square in forkTargets)
+            }
+            .mapNotNull { runCatching { missedPhrase(it) }.getOrNull() }
+            .distinct()
+            .take(MAX_FACTS_PER_REASON)
+
+        if (missedPhrases.isEmpty()) return betterLine
+
+        // Запятые без союза: сама именная группа уже может содержать "и"
+        // ("вилку на d1 и e2"), и обычное перечисление дало бы "и e2 и связку".
+        return betterLine + " Сыгранный ход упускает " + missedPhrases.joinToString(", ") + "."
+    }
+
+    /**
+     * Чего лишился сыгранный ход — короткой именной группой в винительном
+     * падеже, чтобы вставать после "упускает".
+     *
+     * Null для признаков, потеря которых не описывается одним словом: про них
+     * лучше промолчать, чем выдумывать формулировку.
+     */
+    private fun missedPhrase(fact: Fact): String? = when (fact) {
+        is ForkFact -> "вилку на " + russianList(fact.targets.map { sq(it) })
+        is PinFact -> if (fact.absolute) "связку на " + sq(fact.pinned) else "связку по " + sq(fact.pinned)
+        is SkewerFact -> "рентген на " + sq(fact.behind)
+        is DiscoveredAttackFact -> "вскрытое нападение на " + sq(fact.target)
+        is BackRankFact -> "мат по последней горизонтали"
+        is OverloadedDefenderFact -> "перегрузку защитника на " + sq(fact.defender)
+        is MateFact -> "мат в " + fact.movesToMate
+        // Именно какой фигуры: "выигрыш фигуры на b7" про пешку — неправда,
+        // а пешки в этом списке встречаются чаще всего.
+        is HangingPieceFact ->
+            "выигрыш " + PieceLexicon.name(pieceTypeOf(fact.piece), GrammaticalCase.GENITIVE) +
+                " на " + sq(fact.square)
+
+        is TrappedPieceFact ->
+            "поимку " + PieceLexicon.name(pieceTypeOf(fact.piece), GrammaticalCase.GENITIVE) +
+                " на " + sq(fact.square)
+        is OutpostFact -> "форпост на " + sq(fact.square)
+        is PassedPawnFact -> "проходную на " + sq(fact.square)
+        is OpenFileRookFact -> "открытую линию " + fact.file
+        else -> null
     }
 
     // ——— ПРОФИЛАКТИКА ———
@@ -367,37 +541,7 @@ object TextRenderer {
         MoveClassification.BLUNDER -> "серьёзно хуже"
     }
 
-    // ——— ЧТО БУДЕТ ДАЛЬШЕ ———
-
-    private fun continuationBody(section: Section.ExpectedContinuation, explanation: PositionExplanation): String? {
-        if (section.movesSan.isEmpty()) return null
-        val moveNumber = MoveNotation.fullMoveNumber(explanation.fen)
-        val sequence = formatMoveSequence(moveNumber, explanation.sideToMove, section.movesSan)
-        return "Скорее всего: $sequence"
-    }
-
-    /** Оформление вариантов в привычной записи партии: номер хода только перед ходом белых или в самом начале. */
-    private fun formatMoveSequence(startMoveNumber: Int, startSide: Side, sanMoves: List<String>): String {
-        var moveNumber = startMoveNumber
-        var side = startSide
-        val parts = mutableListOf<String>()
-
-        sanMoves.forEachIndexed { index, san ->
-            val translated = SanRuFormatter.move(san)
-            val prefix = when {
-                side == Side.WHITE -> "$moveNumber."
-                index == 0 -> "$moveNumber..."
-                else -> ""
-            }
-            parts += prefix + translated
-            if (side == Side.BLACK) moveNumber += 1
-            side = side.flip()
-        }
-
-        return parts.joinToString(" ")
-    }
-
-    // ——— МАТЕРИАЛ ———
+    // ——— Дедупликация и отбор фактов ———
 
     /** До скольки сантипешек перевес ещё называется "лишняя пешка", а не "лишнее качество". */
     private const val PAWN_MAGNITUDE_CP = 150
@@ -405,36 +549,17 @@ object TextRenderer {
     /** До скольки сантипешек перевес называется "лишнее качество", а не "заметный материальный перевес". */
     private const val EXCHANGE_MAGNITUDE_CP = 300
 
-    /**
-     * Раздел — про баланс материала, а не про то, что где-то что-то висит:
-     * повисшая фигура уже названа в другом месте разбора, и здесь её видно
-     * только как источник этого самого баланса, никогда — отдельной фразой
-     * "Слон на d3 потерян". Заголовок соразмерен величине разницы, а не
-     * зашит одной фразой на все случаи: "оценка +6.84" и "заметный
-     * материальный перевес" рядом читались как противоречие, хотя оба были
-     * правдой — просто перевес там был ровно в одну пешку.
-     */
-    private fun materialBody(section: Section.MaterialNote): String {
-        val side = SideLexicon.name(if (section.centipawnsFromWhite > 0) Side.WHITE else Side.BLACK, GrammaticalCase.GENITIVE)
-        val magnitude = kotlin.math.abs(section.centipawnsFromWhite)
-        return when {
-            magnitude <= PAWN_MAGNITUDE_CP -> "У $side лишняя пешка."
-            magnitude <= EXCHANGE_MAGNITUDE_CP -> "У $side лишнее качество."
-            else -> "Заметный материальный перевес у $side."
-        }
-    }
-
-    // ——— Дедупликация и отбор фактов ———
-
     /** Все факты разбора разом — чтобы вилка поглощала свои цели по всему тексту, а не только в своём пункте. */
     private fun collectAllFacts(explanation: PositionExplanation): List<Fact> = explanation.sections.flatMap { section ->
         when (section) {
+            is Section.PositionAssessment -> emptyList()
+            is Section.MyPosition -> section.kingSafety + section.loosePieces
+            is Section.MyAttack -> section.mate + section.captures + section.activity
             is Section.Threat -> section.threat.consequences
             is Section.WhyThisMove -> section.reasons.flatMap { it.facts }
+            is Section.PlayedMove -> section.missed
             is Section.Plan -> section.steps.flatMap { it.facts }
-            is Section.MaterialNote -> section.facts
-            is Section.KingSafetyNote -> listOf(section.fact)
-            is Section.Prophylaxis, is Section.Trap, is Section.Alternatives, is Section.ExpectedContinuation -> emptyList()
+            is Section.Prophylaxis, is Section.Trap, is Section.Alternatives -> emptyList()
         }
     }
 

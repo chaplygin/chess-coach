@@ -4,6 +4,9 @@ import com.github.bhlangonijr.chesslib.Side
 import com.github.bhlangonijr.chesslib.Piece
 import com.github.bhlangonijr.chesslib.Square
 import org.chesscoach.coach.model.Evidence
+import org.chesscoach.coach.model.ForkFact
+import org.chesscoach.coach.model.HangingPieceFact
+import org.chesscoach.core.MoveClassification
 import org.chesscoach.coach.model.OutpostFact
 import org.chesscoach.coach.model.PlanIdea
 import org.chesscoach.coach.model.PlanStep
@@ -119,5 +122,78 @@ class RendererRobustnessTest {
 
         assertTrue(knightText, knightText.contains("пешкой его оттуда не согнать"))
         assertTrue(rookText, rookText.contains("пешкой её оттуда не согнать"))
+    }
+
+    @Test
+    fun `сыгранный ход называет упущенное своими словами, а не молчит`() {
+        // Ровно ради этого раздела приложение и затевалось: увидеть лучший ход
+        // полезно, но понять, чем именно был хуже собственный, — вдвое.
+        // Дословный повтор фразы из раздела про лучший ход глушится защитой от
+        // повторов, поэтому упущенное называется отдельной формулировкой.
+        val fork = ForkFact(
+            from = Square.C3,
+            piece = Piece.BLACK_KNIGHT,
+            targets = listOf(Square.D1, Square.E2),
+            favours = Side.BLACK,
+            evidence = Evidence.of(Square.C3, Square.D1, Square.E2),
+        )
+        val section = Section.PlayedMove(
+            playedSan = "fxe4",
+            playedUci = "f5e4",
+            bestSan = "Nc3",
+            bestUci = "d5c3",
+            classification = MoveClassification.BLUNDER,
+            centipawnLoss = 320,
+            missed = listOf(fork),
+        )
+
+        val text = TextRenderer.render(explanationWith(section))
+
+        assertTrue(text, text.contains("упускает вилку на d1 и e2"))
+    }
+
+    @Test
+    fun `вилка поглощает перечисление своих же целей в упущенном`() {
+        val fork = ForkFact(
+            from = Square.C3,
+            piece = Piece.BLACK_KNIGHT,
+            targets = listOf(Square.D1, Square.E2),
+            favours = Side.BLACK,
+            evidence = Evidence.of(Square.C3, Square.D1, Square.E2),
+        )
+        val hangingOnTarget = HangingPieceFact(Square.D1, Piece.WHITE_ROOK, 500, Side.BLACK, Evidence.of(Square.D1))
+        val section = Section.PlayedMove(
+            playedSan = "fxe4",
+            playedUci = "f5e4",
+            bestSan = "Nc3",
+            bestUci = "d5c3",
+            classification = MoveClassification.BLUNDER,
+            centipawnLoss = 320,
+            missed = listOf(fork, hangingOnTarget),
+        )
+
+        val text = TextRenderer.render(explanationWith(section))
+
+        // Сказать "упускает вилку и заодно ладью на том же поле" — трижды
+        // назвать одно и то же.
+        assertTrue(text, text.contains("вилку на d1 и e2"))
+        assertTrue(text, !text.contains("выигрыш ладьи на d1"))
+    }
+
+    @Test
+    fun `совпадение с лучшим ходом проговаривается прямо`() {
+        val section = Section.PlayedMove(
+            playedSan = "Nc3",
+            playedUci = "d5c3",
+            bestSan = "Nc3",
+            bestUci = "d5c3",
+            classification = MoveClassification.BEST,
+            centipawnLoss = 0,
+            missed = emptyList(),
+        )
+
+        val text = TextRenderer.render(explanationWith(section))
+
+        assertTrue(text, text.contains("Сыгран лучший ход."))
     }
 }

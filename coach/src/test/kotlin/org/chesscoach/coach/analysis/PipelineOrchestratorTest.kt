@@ -15,12 +15,15 @@ import org.chesscoach.coach.detectors.PieceActivityDetector
 import org.chesscoach.coach.detectors.PinSkewerDetector
 import org.chesscoach.coach.detectors.TrappedPieceDetector
 import org.chesscoach.coach.engine.FakeEngineClient
-import org.chesscoach.coach.model.ReasonTier
 import org.chesscoach.coach.model.Section
 import org.chesscoach.core.EngineLine
 import org.chesscoach.core.MoveClassification
 import org.chesscoach.core.Score
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -63,6 +66,11 @@ class PipelineOrchestratorTest {
                 CommonFens.FLIP_START to listOf(
                     EngineLine(multiPvIndex = 1, score = Score.Cp(10), pv = listOf("d7d5"), depth = 10),
                 ),
+                // Подтверждение лучшего хода 1.e4: конвейер теперь считает причины
+                // ЛУЧШЕГО хода всегда, а не только сыгранного.
+                CommonFens.AFTER_E4 to listOf(
+                    EngineLine(multiPvIndex = 1, score = Score.Cp(25), pv = listOf("e7e5"), depth = 12),
+                ),
                 // Подтверждение сыгранного хода 1.Kf3: чёрные отвечают d5, и по факту
                 // это заметно хуже, чем 1.e4 из основной линии.
                 CommonFens.AFTER_NF3 to listOf(
@@ -82,20 +90,24 @@ class PipelineOrchestratorTest {
         assertEquals("Nf3", explanation.playedMoveSan)
         assertEquals(MoveClassification.MISTAKE, explanation.classification)
 
-        // Угрозы нет (просадка ниже порога), плана нет (в дебюте начальной
-        // расстановки не за что зацепиться), ловушки нет (в основном поиске
-        // только одна линия). Зато настоящий KingSafetyDetector честно замечает:
-        // ...d5 отняло у чёрного короля пешку прикрытия на d7 — это и есть
-        // причина, добытая диффом признаков, а не выдуманная.
-        val whyThisMove = explanation.section<Section.WhyThisMove>()
-        checkNotNull(whyThisMove)
-        assertEquals("Nf3", whyThisMove.moveSan)
-        assertEquals(listOf(ReasonTier.KING_SAFETY), whyThisMove.reasons.map { it.tier })
+        // Угрозы нет (просадка ниже порога в 60 сантипешек).
+        assertNull(explanation.section<Section.Threat>())
 
-        assertEquals(
-            listOf(whyThisMove, Section.ExpectedContinuation(listOf("e4", "e5", "Nf3"))),
-            explanation.sections,
-        )
+        // СЫГРАННЫЙ ХОД — главное новое содержание: сыгран не лучший ход,
+        // классификация и потеря в сантипешках совпадают с тем, что уже
+        // проверено выше через explanation.classification.
+        val playedMove = explanation.section<Section.PlayedMove>()
+        checkNotNull(playedMove)
+        assertEquals("Nf3", playedMove.playedSan)
+        assertEquals("e4", playedMove.bestSan)
+        assertFalse(playedMove.matchesBest)
+        assertEquals(MoveClassification.MISTAKE, playedMove.classification)
+        // Лучший ход держит +30, а после Nf3 d5 подтверждающий поиск даёт -50
+        // с точки зрения белых — просадка ровно 80 сантипешек.
+        assertEquals(80, playedMove.centipawnLoss)
+
+        // ОЦЕНКА ПОЗИЦИИ строится без движка и появляется всегда.
+        assertNotNull(explanation.section<Section.PositionAssessment>())
     }
 
     @Test
@@ -120,5 +132,13 @@ class PipelineOrchestratorTest {
 
         assertEquals("e2e4", explanation.bestMoveUci)
         assertEquals(MoveClassification.BEST, explanation.classification)
+
+        // Сыгран лучший ход: раздел всё равно есть — читателю важно увидеть,
+        // что он ничего не упустил, а не молчание вместо подтверждения.
+        val playedMove = explanation.section<Section.PlayedMove>()
+        checkNotNull(playedMove)
+        assertTrue(playedMove.matchesBest)
+        assertEquals(0, playedMove.centipawnLoss)
+        assertTrue(playedMove.missed.isEmpty())
     }
 }

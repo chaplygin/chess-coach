@@ -9,6 +9,7 @@ import org.chesscoach.coach.model.FeatureSet
 import org.chesscoach.coach.model.HangingPieceFact
 import org.chesscoach.coach.model.MaterialVerdict
 import org.chesscoach.coach.model.OverloadedDefenderFact
+import org.chesscoach.coach.model.PositionCharacter
 import org.chesscoach.coach.model.PositionExplanation
 import org.chesscoach.coach.model.Reason
 import org.chesscoach.coach.model.ReasonTier
@@ -145,7 +146,11 @@ class TextRendererTest {
                 ),
             ),
         )
-        val material = Section.MaterialNote(centipawnsFromWhite = 555, facts = emptyList())
+        val material = Section.PositionAssessment(
+            materialCentipawns = 555,
+            character = PositionCharacter.SEMI_OPEN,
+            ideas = emptyList(),
+        )
 
         val text = TextRenderer.render(explanation(listOf(Section.Threat(threat), trap, alternatives, material)))
         val body = text.substringAfter(System.lineSeparator())

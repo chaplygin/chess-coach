@@ -1,7 +1,9 @@
 package org.chesscoach.app.ui
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -9,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -31,12 +34,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import org.chesscoach.app.AppContainer
+import org.chesscoach.coach.model.ArrowStyle
+import org.chesscoach.coach.model.BoardArrow
+import org.chesscoach.coach.model.BoardMarks
+import org.chesscoach.coach.model.PositionExplanation
+import org.chesscoach.coach.text.TextRenderer
 import org.chesscoach.core.GameReplay
 import org.chesscoach.core.GameSummary
 import org.chesscoach.core.MoveNotation
@@ -50,8 +61,6 @@ import org.chesscoach.engine.SearchLimits
 private data class PositionAdvice(
     val scoreFromWhite: Score,
     val bestMoveSan: String,
-    val bestMoveFrom: String,
-    val bestMoveTo: String,
     val depth: Int,
 )
 
@@ -76,7 +85,7 @@ fun GameReviewScreen(
     // -1 — начальная позиция, до первого хода.
     var currentPly by remember(game.id) { mutableStateOf(-1) }
     var advice by remember(game.id) { mutableStateOf<PositionAdvice?>(null) }
-    var coachText by remember(game.id) { mutableStateOf<String?>(null) }
+    var explanation by remember(game.id) { mutableStateOf<PositionExplanation?>(null) }
     var thinking by remember(game.id) { mutableStateOf(false) }
     var engineError by remember(game.id) { mutableStateOf<String?>(null) }
 
@@ -87,7 +96,7 @@ fun GameReviewScreen(
     // дважды при повторении ходов, а сыгранный из неё ход будет разным.
     LaunchedEffect(fen, currentPly) {
         advice = null
-        coachText = null
+        explanation = null
         engineError = null
         if (positions.isEmpty()) return@LaunchedEffect
 
@@ -108,8 +117,6 @@ fun GameReviewScreen(
                             MoveNotation.sideToMove(fen),
                         ),
                         bestMoveSan = MoveNotation.uciToSanOrRaw(fen, listOf(uci)).first(),
-                        bestMoveFrom = uci.take(2),
-                        bestMoveTo = uci.drop(2).take(2),
                         depth = line.depth,
                     )
                 }
@@ -118,14 +125,19 @@ fun GameReviewScreen(
 
         if (engineError == null) {
             // Ход, который был сыгран в партии из этой позиции: тренеру он
-            // нужен, чтобы сказать, чем он хуже лучшего.
+            // нужен, чтобы сказать, чем он хуже лучшего. Структура разбора
+            // берётся один раз — стрелки и текст строятся из неё же, вместо
+            // того чтобы гонять движок повторно ради каждого представления.
             val playedUci = positions.getOrNull(currentPly + 1)?.uci
-            coachText = runCatching { container.coach.explainAsText(fen, playedUci) }
+            explanation = runCatching { container.coach.explain(fen, playedUci) }
                 .getOrNull()
         }
 
         thinking = false
     }
+
+    val arrows = remember(explanation) { explanation?.let(BoardMarks::of) ?: emptyList() }
+    val coachText = remember(explanation) { explanation?.let(TextRenderer::render) }
 
     LaunchedEffect(currentPly) {
         if (currentPly >= 0) movesState.animateScrollToItem(currentPly)
@@ -153,9 +165,10 @@ fun GameReviewScreen(
             flipped = game.myColor == PlayerColor.BLACK,
             lastMoveFrom = positions.getOrNull(currentPly)?.fromSquare,
             lastMoveTo = positions.getOrNull(currentPly)?.toSquare,
-            arrowFrom = advice?.bestMoveFrom,
-            arrowTo = advice?.bestMoveTo,
+            arrows = arrows,
         )
+
+        ArrowLegend(arrows)
 
         MoveStrip(
             positions = positions,
@@ -195,6 +208,69 @@ private fun currentFen(positions: List<PlyPosition>, currentPly: Int): String = 
     positions.isEmpty() -> START_FEN
     currentPly < 0 -> positions.first().fenBefore
     else -> positions[currentPly].fenAfter
+}
+
+private val LEGEND_SWATCH_WIDTH = 22.dp
+private val LEGEND_SWATCH_HEIGHT = 4.dp
+
+/**
+ * Порядок легенды фиксирован (не порядок появления в списке стрелок), иначе
+ * пункты будут прыгать местами от хода к ходу без всякой причины.
+ */
+private val LEGEND_ORDER = listOf(
+    ArrowStyle.BEST_MOVE,
+    ArrowStyle.PLAYED_MOVE,
+    ArrowStyle.THREAT,
+    ArrowStyle.CONSEQUENCE,
+)
+
+private fun legendLabel(style: ArrowStyle): String = when (style) {
+    ArrowStyle.BEST_MOVE -> "Лучший ход"
+    ArrowStyle.PLAYED_MOVE -> "Сыгранный ход"
+    ArrowStyle.THREAT -> "Угроза соперника"
+    ArrowStyle.CONSEQUENCE -> "Следствие (пунктир)"
+}
+
+/**
+ * Легенда цветов стрелок — без неё серая и зелёная стрелки ничего не говорят.
+ * Показывает только те виды, что реально есть на доске сейчас.
+ */
+@Composable
+private fun ArrowLegend(arrows: List<BoardArrow>) {
+    val stylesPresent = remember(arrows) {
+        LEGEND_ORDER.filter { style -> arrows.any { it.style == style } }
+    }
+    if (stylesPresent.isEmpty()) return
+
+    Row(
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        stylesPresent.forEach { style ->
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Canvas(Modifier.width(LEGEND_SWATCH_WIDTH).height(LEGEND_SWATCH_HEIGHT)) {
+                    val dashed = arrowLegendDashed(style)
+                    drawLine(
+                        color = arrowLegendColor(style),
+                        start = Offset(0f, size.height / 2f),
+                        end = Offset(size.width, size.height / 2f),
+                        strokeWidth = size.height,
+                        cap = StrokeCap.Round,
+                        pathEffect = if (dashed) {
+                            PathEffect.dashPathEffect(floatArrayOf(size.width * 0.22f, size.width * 0.14f))
+                        } else {
+                            null
+                        },
+                    )
+                }
+                Text(legendLabel(style), style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
 }
 
 @Composable

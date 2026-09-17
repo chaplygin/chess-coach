@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Тот же коричневый, что и тёмная клетка доски: значок узнаётся как
+         часть того же приложения, а не рисуется отдельным цветом наугад. -->
+    <color name="ic_launcher_background">#FFB58863</color>
+    <color name="ic_launcher_foreground_fill">#FFF5EBDD</color>
+</resources>

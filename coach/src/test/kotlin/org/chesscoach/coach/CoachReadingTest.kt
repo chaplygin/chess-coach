@@ -37,9 +37,30 @@ class CoachReadingTest {
                     println("FEN: " + fixture.fen)
                     println("Решение Lichess: " + fixture.solution.joinToString(" "))
                     println("-".repeat(72))
-                    println(coach.explainAsText(fixture.fen))
+                    // Сыгранным ходом подставляем решение задачи: без него
+                    // раздел про сыгранный ход не появляется, а это главное,
+                    // ради чего разбор и читают.
+                    println(coach.explainAsText(fixture.fen, fixture.solution.firstOrNull()))
+
+                    // И тот же разбор с заведомо другим ходом: так видно, как
+                    // звучит разговор об ошибке, а не о попадании в лучший.
+                    val other = otherLegalMove(fixture.fen, fixture.solution.firstOrNull())
+                    if (other != null) {
+                        println()
+                        println("--- тот же разбор, но сыгран " + other + " ---")
+                        println(coach.explainAsText(fixture.fen, other))
+                    }
                 }
             }
         }
+    }
+
+    /** Любой легальный ход, кроме [avoid] — чтобы увидеть разговор об ошибке. */
+    private fun otherLegalMove(fen: String, avoid: String?): String? {
+        val board = com.github.bhlangonijr.chesslib.Board()
+        if (!runCatching { board.loadFromFen(fen) }.isSuccess) return null
+        return board.legalMoves()
+            .map { it.toString() }
+            .firstOrNull { it != avoid }
     }
 }

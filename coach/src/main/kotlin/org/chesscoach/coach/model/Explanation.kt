@@ -47,6 +47,24 @@ enum class MaterialVerdict {
     POSITIONAL,
 }
 
+/**
+ * Характер позиции. Решает, какие советы уместны: в закрытой позиции
+ * "вскрыть линию" звучит разумно, а "быстрее разменяться" — нет.
+ */
+enum class PositionCharacter { OPEN, CLOSED, SEMI_OPEN }
+
+/** Общая идея, которую стоит держать в голове в этой позиции. */
+enum class StrategicIdea {
+    ATTACK_KING,
+    FORCE_EXCHANGES,
+    DEFEND,
+    IMPROVE_PIECES,
+    PUSH_PAWNS,
+    SIMPLIFY_TO_ENDGAME,
+    OPEN_THE_POSITION,
+    KEEP_IT_CLOSED,
+}
+
 data class AlternativeLine(
     val moveSan: String,
     val scoreFromWhite: Score,
@@ -59,7 +77,52 @@ data class AlternativeLine(
  * отсутствует в списке — пустых заголовков и фраз-заполнителей не бывает.
  */
 sealed interface Section {
+
+    /**
+     * Общая оценка позиции — первое, что читает человек.
+     *
+     * Отвечает на вопрос "как у меня дела и что вообще делать", прежде чем
+     * разговор уйдёт в конкретный ход.
+     */
+    data class PositionAssessment(
+        val materialCentipawns: Int,
+        val character: PositionCharacter,
+        val ideas: List<StrategicIdea>,
+    ) : Section
+
+    /** Моя позиция: за что могут наказать прямо сейчас. */
+    data class MyPosition(
+        val kingSafety: List<Fact>,
+        val loosePieces: List<Fact>,
+    ) : Section
+
+    /** Моя атака: чем я могу наказать соперника. */
+    data class MyAttack(
+        val mate: List<Fact>,
+        val captures: List<Fact>,
+        val activity: List<Fact>,
+    ) : Section
+
     data class Threat(val threat: ThreatFact) : Section
+
+    /**
+     * Разбор хода, сыгранного в партии, в сравнении с лучшим.
+     *
+     * Ради этого раздела приложение и затевалось: увидеть лучший ход полезно,
+     * но понять, чем именно был хуже собственный, — полезнее вдвое.
+     */
+    data class PlayedMove(
+        val playedSan: String,
+        val playedUci: String,
+        val bestSan: String,
+        val bestUci: String,
+        val classification: MoveClassification,
+        val centipawnLoss: Int,
+        /** Чего лишился сыгранный ход по сравнению с лучшим. */
+        val missed: List<Fact>,
+    ) : Section {
+        val matchesBest: Boolean get() = playedUci == bestUci
+    }
 
     /**
      * [pointIsInTheLine] — смысл хода не сводится к признакам позиции.
@@ -88,12 +151,6 @@ sealed interface Section {
 
     data class Alternatives(val lines: List<AlternativeLine>) : Section
 
-    /** Какие ходы соперника наиболее вероятны дальше — это главный вариант движка. */
-    data class ExpectedContinuation(val movesSan: List<String>) : Section
-
-    data class KingSafetyNote(val fact: KingSafetyFact) : Section
-
-    data class MaterialNote(val centipawnsFromWhite: Int, val facts: List<Fact>) : Section
 }
 
 /**

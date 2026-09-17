@@ -5,14 +5,25 @@ import org.chesscoach.coach.engine.CoachSearchLimits
 import org.chesscoach.coach.engine.EngineClient
 import org.chesscoach.coach.engine.NullMoveUtil
 import org.chesscoach.coach.model.AlternativeLine
-import org.chesscoach.coach.model.CoachThresholds
+import org.chesscoach.coach.model.BackRankFact
+import org.chesscoach.coach.model.CenterControlFact
+import org.chesscoach.coach.model.DevelopmentFact
+import org.chesscoach.coach.model.DiscoveredAttackFact
 import org.chesscoach.coach.model.Fact
+import org.chesscoach.coach.model.FeatureSet
 import org.chesscoach.coach.model.FeatureSource
+import org.chesscoach.coach.model.ForkFact
 import org.chesscoach.coach.model.HangingPieceFact
 import org.chesscoach.coach.model.KingSafetyFact
 import org.chesscoach.coach.model.MateFact
+import org.chesscoach.coach.model.MobilityEdgeFact
+import org.chesscoach.coach.model.OpenFileRookFact
+import org.chesscoach.coach.model.OutpostFact
+import org.chesscoach.coach.model.OverloadedDefenderFact
+import org.chesscoach.coach.model.PinFact
 import org.chesscoach.coach.model.PositionExplanation
 import org.chesscoach.coach.model.Section
+import org.chesscoach.coach.model.SkewerFact
 import org.chesscoach.coach.model.TrappedPieceFact
 import org.chesscoach.coach.model.ReasonTier
 import org.chesscoach.core.EngineLine
@@ -59,35 +70,78 @@ class PipelineOrchestrator(
 
         val sections = mutableListOf<Section>()
 
-        // 2. Нулевой ход: секция УГРОЗА.
+        // 2. Оценка позиции и расклад "моя позиция / моя атака" — без движка,
+        // прямо из уже посчитанных признаков. Это первое, что читает человек,
+        // поэтому идёт в списке раньше конкретного хода.
+        sections += PositionAssessor.assess(fen, featuresBefore, sideToMove)
+        myPositionSection(featuresBefore, sideToMove)?.let { sections += it }
+        myAttackSection(featuresBefore, sideToMove)?.let { sections += it }
+
+        // 3. Нулевой ход: секция УГРОЗА.
         if (bestLine != null) {
             threatAnalyzer.analyse(fen, bestLine.score)?.let { sections += Section.Threat(it) }
         }
 
-        // 3. Подтверждение хода: секции "почему этот ход" и "профилактика",
-        // плюс классификация сыгранного хода, если он был.
+        // 4. Почему лучший ход хорош, профилактика и разбор сыгранного хода
+        // в сравнении с лучшим.
         var classification: MoveClassification? = null
         if (bestLine != null && bestMoveUci != null) {
-            val moveToExplain = playedMoveUci ?: bestMoveUci
-            val diff = reasonDiffAnalyzer.analyse(fen, moveToExplain, bestLine.score)
-            diff.whyThisMove
+            val bestDiff = reasonDiffAnalyzer.analyse(fen, bestMoveUci, bestLine.score)
+            bestDiff.whyThisMove
                 ?.let { it.copy(pointIsInTheLine = pointIsInTheLine(it, bestLine, mainLines)) }
                 ?.let { sections += it }
+
+            if (playedMoveUci != null) {
+                // Если сыгран лучший ход, второй раз спрашивать движок незачем —
+                // диф уже посчитан выше.
+                val playedDiff = if (playedMoveUci == bestMoveUci) {
+                    bestDiff
+                } else {
+                    reasonDiffAnalyzer.analyse(fen, playedMoveUci, bestLine.score)
+                }
+
+                val evaluation = evaluatePlayedMove(
+                    bestScore = bestLine.score,
+                    playedMoveUci = playedMoveUci,
+                    bestMoveUci = bestMoveUci,
+                    mainLines = mainLines,
+                    fallbackPlayedScore = playedDiff.moveScoreFromMover,
+                )
+
+                if (evaluation != null) {
+                    classification = evaluation.classification
+
+                    // Чего лишился сыгранный ход по сравнению с лучшим: факты,
+                    // которые дал бы лучший ход, но не дал сыгранный. Когда ходы
+                    // совпадают, playedDiff — это тот же самый bestDiff, и
+                    // разница закономерно пустая.
+                    val bestFacts = bestDiff.whyThisMove?.reasons?.flatMap { it.facts } ?: emptyList()
+                    val playedFacts = playedDiff.whyThisMove?.reasons?.flatMap { it.facts } ?: emptyList()
+                    val missed = bestFacts.filterNot { it in playedFacts }
+
+                    val playedSan = MoveNotation.uciToSanOrRaw(fen, listOf(playedMoveUci)).first()
+                    sections += Section.PlayedMove(
+                        playedSan = playedSan,
+                        playedUci = playedMoveUci,
+                        bestSan = bestMoveSan,
+                        bestUci = bestMoveUci,
+                        classification = evaluation.classification,
+                        centipawnLoss = evaluation.centipawnLoss,
+                        missed = missed,
+                    )
+                }
+            }
 
             // Профилактика — третий тир причин, и обычно она уже стоит пунктом
             // в списке "почему этот ход". Отдельный раздел тогда повторяет то
             // же самое другими словами, и разбор выглядит так, будто тренер
             // забыл, что уже это сказал.
-            val alreadyAmongReasons = diff.whyThisMove
+            val alreadyAmongReasons = bestDiff.whyThisMove
                 ?.reasons
-                ?.any { reason -> reason.facts.any { it === diff.prophylaxis } }
+                ?.any { reason -> reason.facts.any { it === bestDiff.prophylaxis } }
                 ?: false
             if (!alreadyAmongReasons) {
-                diff.prophylaxis?.let { sections += Section.Prophylaxis(it) }
-            }
-
-            if (playedMoveUci != null) {
-                classification = classify(bestLine.score, playedMoveUci, bestMoveUci, mainLines, diff.moveScoreFromMover)
+                bestDiff.prophylaxis?.let { sections += Section.Prophylaxis(it) }
             }
         }
 
@@ -95,7 +149,7 @@ class PipelineOrchestrator(
         val planSteps = PlanBuilder.build(featuresBefore, sideToMove)
         if (planSteps.isNotEmpty()) sections += Section.Plan(planSteps)
 
-        // 4-5. Опровержение ловушки и быстрый поиск малой глубины — внутри TrapSelector,
+        // 5-6. Опровержение ловушки и быстрый поиск малой глубины — внутри TrapSelector,
         // и только если вообще есть из чего выбирать (нужна хотя бы одна альтернатива лучшему ходу).
         if (bestLine != null && mainLines.size > 1) {
             val quickLines = engineClient.analyse(fen, CoachSearchLimits(movetimeMs = 50, depth = 4, multiPv = 3))
@@ -104,11 +158,7 @@ class PipelineOrchestrator(
 
         if (bestLine != null) {
             alternativesSection(fen, sideToMove, bestLine, mainLines)?.let { sections += it }
-            expectedContinuationSection(fen, bestLine)?.let { sections += it }
         }
-
-        kingSafetySection(featuresBefore.facts, sideToMove)?.let { sections += it }
-        materialSection(featuresBefore.materialCentipawns, featuresBefore.facts)?.let { sections += it }
 
         return PositionExplanation(
             fen = fen,
@@ -124,12 +174,78 @@ class PipelineOrchestrator(
     }
 
     /**
+     * МОЯ ПОЗИЦИЯ: за что могут наказать прямо сейчас — с точки зрения
+     * стороны, чей сейчас ход.
+     *
+     * `favours` у факта — это сторона, которой он на пользу (см. [Fact]), а не
+     * его владелец: моя повисшая фигура на пользу сопернику, поэтому
+     * "мои" факты ищутся через `favouring(mover.flip())`, а не через
+     * фильтрацию по стороне фигуры.
+     */
+    private fun myPositionSection(features: FeatureSet, mover: Side): Section? {
+        val opponent = mover.flip()
+        val kingSafety = features.pick<KingSafetyFact>().filter { it.kingSide == mover }
+        val loosePieces = features.favouring(opponent).filter {
+            it is HangingPieceFact || it is TrappedPieceFact || it is BackRankFact
+        }
+        if (kingSafety.isEmpty() && loosePieces.isEmpty()) return null
+        return Section.MyPosition(kingSafety = kingSafety, loosePieces = loosePieces)
+    }
+
+    /** МОЯ АТАКА: чем можно наказать соперника — те же факты, но на пользу мне. */
+    private fun myAttackSection(features: FeatureSet, mover: Side): Section? {
+        val mine = features.favouring(mover)
+        val mate = mine.filter { it is MateFact || it is BackRankFact }
+        val captures = mine.filter {
+            it is HangingPieceFact || it is ForkFact || it is PinFact || it is SkewerFact ||
+                it is DiscoveredAttackFact || it is OverloadedDefenderFact
+        }
+        val activity = mine.filter {
+            it is MobilityEdgeFact || it is OutpostFact || it is OpenFileRookFact ||
+                it is CenterControlFact || it is DevelopmentFact
+        }
+        if (mate.isEmpty() && captures.isEmpty() && activity.isEmpty()) return null
+        return Section.MyAttack(mate = mate, captures = captures, activity = activity)
+    }
+
+    private data class PlayedMoveEvaluation(val classification: MoveClassification, val centipawnLoss: Int)
+
+    /** Null — движку нечем оценить сыгранный ход (совсем экзотическая позиция), классифицировать нечего. */
+    private fun evaluatePlayedMove(
+        bestScore: Score,
+        playedMoveUci: String,
+        bestMoveUci: String,
+        mainLines: List<EngineLine>,
+        fallbackPlayedScore: Score?,
+    ): PlayedMoveEvaluation? {
+        val playedScore = playedScoreOf(bestScore, playedMoveUci, bestMoveUci, mainLines, fallbackPlayedScore)
+            ?: return null
+
+        val cpLoss = ScoreFormat.centipawnLoss(bestScore, playedScore)
+        val missedForcedMate = bestScore is Score.Mate && bestScore.movesToMate > 0 &&
+            !(playedScore is Score.Mate && playedScore.movesToMate > 0)
+
+        return PlayedMoveEvaluation(MoveClassification.of(cpLoss, missedForcedMate), cpLoss)
+    }
+
+    /**
      * Оценка сыгранного хода почти всегда уже известна: либо это лучший ход
      * (потери нет), либо один из показанных MultiPV-альтернатив (оценка есть
      * прямо в нём), и только если сыгранный ход выпал даже из тройки лучших —
      * пригождается запасной вариант, добытый в [ReasonDiffAnalyzer] через
      * подтверждающий поиск после этого самого хода.
      */
+    private fun playedScoreOf(
+        bestScore: Score,
+        playedMoveUci: String,
+        bestMoveUci: String,
+        mainLines: List<EngineLine>,
+        fallbackPlayedScore: Score?,
+    ): Score? = when {
+        playedMoveUci == bestMoveUci -> bestScore
+        else -> mainLines.firstOrNull { it.pv.firstOrNull() == playedMoveUci }?.score ?: fallbackPlayedScore
+    }
+
     /**
      * Ход заметно сильнее остальных, а объяснить его нечем, кроме мелочей.
      *
@@ -161,38 +277,21 @@ class PipelineOrchestrator(
      *
      * Задаётся отдельно от порядка сборки: движок опрашивается в том порядке,
      * в каком дешевле считать, а читать надо в том, в каком тренер объясняет.
-     * Иначе замечание про материал оказывается в конце, после длинного
-     * варианта, где его уже никто не увидит.
+     * Сначала общая картина (оценка позиции, моя позиция, моя атака), потом
+     * конкретный ход, и только в конце — план, который подводит итог всему
+     * сказанному выше.
      */
     private fun readingOrder(section: Section): Int = when (section) {
-        is Section.MaterialNote -> 0
-        is Section.Threat -> 1
-        is Section.WhyThisMove -> 2
-        is Section.Prophylaxis -> 3
-        is Section.Plan -> 4
-        is Section.Trap -> 5
-        is Section.Alternatives -> 6
-        is Section.ExpectedContinuation -> 7
-        is Section.KingSafetyNote -> 8
-    }
-
-    private fun classify(
-        bestScore: Score,
-        playedMoveUci: String,
-        bestMoveUci: String,
-        mainLines: List<EngineLine>,
-        fallbackPlayedScore: Score?,
-    ): MoveClassification? {
-        val playedScore = when {
-            playedMoveUci == bestMoveUci -> bestScore
-            else -> mainLines.firstOrNull { it.pv.firstOrNull() == playedMoveUci }?.score ?: fallbackPlayedScore
-        } ?: return null
-
-        val cpLoss = ScoreFormat.centipawnLoss(bestScore, playedScore)
-        val missedForcedMate = bestScore is Score.Mate && bestScore.movesToMate > 0 &&
-            !(playedScore is Score.Mate && playedScore.movesToMate > 0)
-
-        return MoveClassification.of(cpLoss, missedForcedMate)
+        is Section.PositionAssessment -> 0
+        is Section.MyPosition -> 1
+        is Section.MyAttack -> 2
+        is Section.Threat -> 3
+        is Section.WhyThisMove -> 4
+        is Section.PlayedMove -> 5
+        is Section.Prophylaxis -> 6
+        is Section.Trap -> 7
+        is Section.Alternatives -> 8
+        is Section.Plan -> 9
     }
 
     private fun alternativesSection(
@@ -223,23 +322,5 @@ class PipelineOrchestrator(
         }
 
         return if (lines.isEmpty()) null else Section.Alternatives(lines)
-    }
-
-    private fun expectedContinuationSection(fen: String, bestLine: EngineLine): Section? {
-        if (bestLine.pv.isEmpty()) return null
-        val san = MoveNotation.uciToSanOrRaw(fen, bestLine.pv)
-        return Section.ExpectedContinuation(san)
-    }
-
-    /** Предупреждаем о безопасности именно своего короля — не короля соперника. */
-    private fun kingSafetySection(facts: List<Fact>, sideToMove: Side): Section? {
-        val fact = facts.filterIsInstance<KingSafetyFact>().firstOrNull { it.kingSide == sideToMove } ?: return null
-        return Section.KingSafetyNote(fact)
-    }
-
-    private fun materialSection(materialCentipawns: Int, facts: List<Fact>): Section? {
-        if (kotlin.math.abs(materialCentipawns) < CoachThresholds.MATERIAL_NOTE_CP) return null
-        val supporting = facts.filter { it is HangingPieceFact || it is TrappedPieceFact || it is MateFact }
-        return Section.MaterialNote(materialCentipawns, supporting)
     }
 }

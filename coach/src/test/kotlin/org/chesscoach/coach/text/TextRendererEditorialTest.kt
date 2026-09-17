@@ -146,14 +146,20 @@ class TextRendererEditorialTest {
             evidence = Evidence.of(Square.G8),
         )
 
+        // Порядок важен: рендер идёт по списку секций именно в этом порядке, и
+        // память о сказанном заполняется по ходу дела — причина хода должна
+        // "занять" фразу раньше, чем до неё дойдёт МОЯ ПОЗИЦИЯ.
         val sections = listOf(
             Section.WhyThisMove("Rfe8", listOf(Reason(ReasonTier.KING_SAFETY, listOf(kingSafety)))),
-            Section.KingSafetyNote(kingSafety),
+            Section.MyPosition(kingSafety = listOf(kingSafety), loosePieces = emptyList()),
         )
 
         val text = TextRenderer.render(explanation(sections))
 
-        assertFalse(text, text.contains("БЕЗОПАСНОСТЬ КОРОЛЯ"))
+        // Факт целиком ушёл в причины хода — секции МОЯ ПОЗИЦИЯ с пустыми
+        // руками нечего печатать, она пропадает вовсе, а не оставляет пустой
+        // заголовок.
+        assertFalse(text, text.contains("МОЯ ПОЗИЦИЯ"))
         assertEquals(1, Regex("под давлением").findAll(text).count())
     }
 
@@ -251,36 +257,38 @@ class TextRendererEditorialTest {
 
     @Test
     fun `a pawn-sized imbalance is called an extra pawn, not a vague material edge`() {
-        val text = TextRenderer.render(explanation(listOf(Section.MaterialNote(centipawnsFromWhite = -110, facts = emptyList()))))
+        val section = org.chesscoach.coach.model.Section.PositionAssessment(
+            materialCentipawns = -110,
+            character = org.chesscoach.coach.model.PositionCharacter.SEMI_OPEN,
+            ideas = emptyList(),
+        )
+        val text = TextRenderer.render(explanation(listOf(section)))
 
-        assertTrue(text, text.contains("У чёрных лишняя пешка."))
+        assertTrue(text, text.contains("Материал: у чёрных лишняя пешка."))
     }
 
     @Test
     fun `an exchange-sized imbalance is called an extra exchange`() {
-        val text = TextRenderer.render(explanation(listOf(Section.MaterialNote(centipawnsFromWhite = 200, facts = emptyList()))))
+        val section = org.chesscoach.coach.model.Section.PositionAssessment(
+            materialCentipawns = 200,
+            character = org.chesscoach.coach.model.PositionCharacter.SEMI_OPEN,
+            ideas = emptyList(),
+        )
+        val text = TextRenderer.render(explanation(listOf(section)))
 
-        assertTrue(text, text.contains("У белых лишнее качество."))
+        assertTrue(text, text.contains("Материал: у белых лишнее качество."))
     }
 
     @Test
     fun `a piece-or-more imbalance keeps the general noticeable material edge wording`() {
-        val text = TextRenderer.render(explanation(listOf(Section.MaterialNote(centipawnsFromWhite = -600, facts = emptyList()))))
-
-        assertTrue(text, text.contains("Заметный материальный перевес у чёрных."))
-    }
-
-    @Test
-    fun `hanging pieces are not repeated inside the MATERIAL section — that is said elsewhere`() {
-        val hanging = HangingPieceFact(Square.D3, Piece.WHITE_BISHOP, 330, Side.BLACK, Evidence.of(Square.D3))
-        val section = Section.MaterialNote(centipawnsFromWhite = -110, facts = listOf(hanging))
-
+        val section = org.chesscoach.coach.model.Section.PositionAssessment(
+            materialCentipawns = -600,
+            character = org.chesscoach.coach.model.PositionCharacter.SEMI_OPEN,
+            ideas = emptyList(),
+        )
         val text = TextRenderer.render(explanation(listOf(section)))
-        val materialBlock = text.substringAfter("МАТЕРИАЛ")
 
-        assertTrue(materialBlock, materialBlock.contains("У чёрных лишняя пешка."))
-        assertFalse(materialBlock, materialBlock.contains("потерян"))
-        assertFalse(materialBlock, materialBlock.contains("Слон"))
+        assertTrue(text, text.contains("Материал: заметный перевес у чёрных."))
     }
 
     // ——— Свой и чужой король не путаются (пункт 9 правки) ———
