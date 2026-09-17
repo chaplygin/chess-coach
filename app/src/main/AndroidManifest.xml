@@ -47,6 +47,22 @@
         </activity>
 
         <!--
+            Снимок для разбора по фото берётся в полном разрешении, а для этого
+            камере нужно отдать адрес файла. Превью, которое отдаёт камера без
+            файла, слишком мелкое: на нём клетка настоящей доски занимает
+            несколько десятков пикселей, и силуэт фигуры по ним не разобрать.
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.photos"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/photo_paths" />
+        </provider>
+
+        <!--
             android:foregroundServiceType обязателен начиная с API 34 — без
             него сервис падает прямо при вызове startForeground.
         -->

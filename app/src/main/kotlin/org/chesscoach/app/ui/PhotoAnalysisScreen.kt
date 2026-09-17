@@ -1,7 +1,11 @@
 package org.chesscoach.app.ui
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.ImageDecoder
+import android.net.Uri
+import androidx.core.content.FileProvider
+import java.io.File
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -47,6 +51,7 @@ import org.chesscoach.core.catchingNonCancellation
 import org.chesscoach.core.mapCatchingNonCancellation
 import org.chesscoach.core.vision.BoardRecognizer
 import org.chesscoach.core.vision.GrayImage
+import org.chesscoach.core.vision.PhotoSource
 import org.chesscoach.core.vision.RecognitionResult
 import org.chesscoach.engine.SearchLimits
 
@@ -71,6 +76,7 @@ fun PhotoAnalysisScreen(container: AppContainer, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
 
     var whiteToMove by remember { mutableStateOf(true) }
+    var source by remember { mutableStateOf(PhotoSource.SCREEN) }
     var lastImage by remember { mutableStateOf<GrayImage?>(null) }
     var loadError by remember { mutableStateOf<String?>(null) }
     var loadingPhoto by remember { mutableStateOf(false) }
@@ -94,41 +100,53 @@ fun PhotoAnalysisScreen(container: AppContainer, onBack: () -> Unit) {
         }
     }
 
-    val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
+    fun loadFromUri(uri: Uri, whenMissing: String) {
         loadError = null
         loadingPhoto = true
         scope.launch {
             val bitmap = catchingNonCancellation {
                 withContext(Dispatchers.IO) {
-                    val source = ImageDecoder.createSource(context.contentResolver, uri)
-                    ImageDecoder.decodeBitmap(source) { decoder, _, _ -> decoder.isMutableRequired = true }
+                    val decoded = ImageDecoder.createSource(context.contentResolver, uri)
+                    ImageDecoder.decodeBitmap(decoded) { decoder, _, _ -> decoder.isMutableRequired = true }
                 }
             }.getOrNull()
             loadingPhoto = false
-            if (bitmap == null) {
-                loadError = "Не удалось открыть изображение из галереи."
-            } else {
-                handleBitmap(bitmap)
-            }
+            if (bitmap == null) loadError = whenMissing else handleBitmap(bitmap)
         }
     }
 
-    // TakePicturePreview отдаёт уменьшенный превью-снимок сразу Bitmap-ом, без
-    // Uri и FileProvider — ровно то, что нужно, раз распознаванию всё равно
-    // нужна картинка стороной не больше 1024, а не полное разрешение камеры.
-    val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap ->
-        if (bitmap != null) handleBitmap(bitmap)
+    val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) loadFromUri(uri, "Не удалось открыть изображение из галереи.")
     }
 
-    LaunchedEffect(lastImage, whiteToMove) {
+    // Снимок берётся в полном разрешении через файл, а не превью, которое
+    // камера отдаёт без файла: на превью клетка настоящей доски занимает
+    // несколько десятков пикселей, и силуэт фигуры по ним не разобрать.
+    var pendingPhoto by remember { mutableStateOf<Uri?>(null) }
+    val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { saved ->
+        val uri = pendingPhoto
+        pendingPhoto = null
+        if (saved && uri != null) loadFromUri(uri, "Не удалось прочитать снимок с камеры.")
+    }
+
+    fun takePhoto() {
+        val uri = catchingNonCancellation { newPhotoUri(context) }.getOrNull()
+        if (uri == null) {
+            loadError = "Не удалось подготовить файл для снимка."
+            return
+        }
+        pendingPhoto = uri
+        cameraLauncher.launch(uri)
+    }
+
+    LaunchedEffect(lastImage, whiteToMove, source) {
         val image = lastImage
         if (image == null) {
             recognition = null
             return@LaunchedEffect
         }
         recognizing = true
-        recognition = withContext(Dispatchers.Default) { BoardRecognizer.recognize(image, whiteToMove) }
+        recognition = withContext(Dispatchers.Default) { BoardRecognizer.recognize(image, whiteToMove, source) }
         recognizing = false
     }
 
@@ -193,10 +211,12 @@ fun PhotoAnalysisScreen(container: AppContainer, onBack: () -> Unit) {
             ) { Text("Из галереи") }
 
             Button(
-                onClick = { cameraLauncher.launch(null) },
+                onClick = { takePhoto() },
                 modifier = Modifier.weight(1f),
             ) { Text("Снять камерой") }
         }
+
+        SourceToggle(source = source, onChange = { source = it })
 
         SideToggle(whiteToMove = whiteToMove, onChange = { whiteToMove = it })
 
@@ -236,6 +256,41 @@ fun PhotoAnalysisScreen(container: AppContainer, onBack: () -> Unit) {
                 }
             }
         }
+    }
+}
+
+/**
+ * Откуда снимок: с экрана или с настоящей доски.
+ *
+ * Спрашиваем, а не угадываем: два случая обрабатываются по-разному, и ошибка
+ * в догадке выглядела бы для человека как беспричинный отказ распознать
+ * нормальный снимок.
+ */
+@Composable
+private fun SourceToggle(source: PhotoSource, onChange: (PhotoSource) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = { onChange(PhotoSource.SCREEN) },
+                modifier = Modifier.weight(1f),
+                colors = toggleColors(selected = source == PhotoSource.SCREEN),
+            ) { Text("С экрана") }
+
+            Button(
+                onClick = { onChange(PhotoSource.BOARD) },
+                modifier = Modifier.weight(1f),
+                colors = toggleColors(selected = source == PhotoSource.BOARD),
+            ) { Text("Живая доска") }
+        }
+
+        Text(
+            when (source) {
+                PhotoSource.SCREEN -> "Скриншот с телефона или фотография экрана монитора."
+                PhotoSource.BOARD -> "Фотография настоящей доски: снимайте сверху, при ровном свете."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = Color(0xFF5F6368),
+        )
     }
 }
 
@@ -408,4 +463,19 @@ private fun downscale(bitmap: Bitmap, maxSide: Int): Bitmap {
     val newWidth = (bitmap.width * scale).toInt().coerceAtLeast(1)
     val newHeight = (bitmap.height * scale).toInt().coerceAtLeast(1)
     return Bitmap.createScaledBitmap(bitmap, newWidth, newHeight, true)
+}
+
+/**
+ * Адрес временного файла для снимка с камеры.
+ *
+ * Файл лежит в кэше приложения и отдаётся камере через FileProvider: прямой
+ * путь file:// система запрещает передавать другим приложениям начиная с
+ * Android 7, а разрешение на съёмку так не требуется вовсе — снимает
+ * стороннее приложение камеры, а не мы.
+ */
+private fun newPhotoUri(context: Context): Uri {
+    val folder = File(context.cacheDir, "camera")
+    folder.mkdirs()
+    val file = File(folder, "board-" + System.currentTimeMillis() + ".jpg")
+    return FileProvider.getUriForFile(context, context.packageName + ".photos", file)
 }

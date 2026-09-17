@@ -20,6 +20,23 @@ import org.chesscoach.core.BoardLayout
 data class GrayImage(val width: Int, val height: Int, val pixels: IntArray)
 
 /**
+ * Откуда взялся снимок. От этого зависит и поиск доски, и то, что советовать
+ * человеку, когда распознать не удалось.
+ *
+ * Два случая действительно разные, а не два названия одного. На экране доска
+ * плоская, нарисована ровно, фигуры лежат внутри своих клеток и покрашены в
+ * два чистых цвета. На настоящей доске фигуры объёмные, свет неровный,
+ * "белые" кремовые, а сам снимок почти всегда сделан под углом.
+ */
+enum class PhotoSource {
+    /** Скриншот с телефона или фотография экрана монитора. */
+    SCREEN,
+
+    /** Фотография настоящей доски. */
+    BOARD,
+}
+
+/**
  * Результат распознавания позиции с фотографии.
  *
  * Три исхода, а не два: "не нашли доску" и "нашли, но не уверены в фигурах" —
@@ -49,12 +66,13 @@ sealed interface RecognitionResult {
  */
 object BoardRecognizer {
 
-    fun recognize(image: GrayImage, whiteToMove: Boolean): RecognitionResult {
+    fun recognize(
+        image: GrayImage,
+        whiteToMove: Boolean,
+        source: PhotoSource = PhotoSource.SCREEN,
+    ): RecognitionResult {
         val raw = readAllCells(image)
-            ?: return RecognitionResult.NoBoardFound(
-                "Не нашли на снимке квадратную доску с чередованием клеток. " +
-                    "Попробуйте снять доску прямо сверху, без наклона."
-            )
+            ?: return RecognitionResult.NoBoardFound(boardNotFoundAdvice(source))
 
         val unreadable = mutableListOf<String>()
         for (index in 0 until 64) {
@@ -82,6 +100,20 @@ object BoardRecognizer {
     }
 
     private fun squareNameOf(index: Int): String = BoardLayout.squareName(index) ?: "?"
+
+    /**
+     * Совет человеку зависит от того, что он снимал: переснять скриншот
+     * "ровнее" нельзя, а вот обрезать лишнее вокруг доски можно.
+     */
+    private fun boardNotFoundAdvice(source: PhotoSource): String = when (source) {
+        PhotoSource.SCREEN ->
+            "На снимке не нашлась доска. Если это скриншот — обрежьте всё лишнее вокруг доски. " +
+                "Если это фотография экрана — снимайте прямо напротив, чтобы доска не выглядела трапецией."
+
+        PhotoSource.BOARD ->
+            "На снимке не нашлась доска. Снимайте сверху, чтобы в кадр попала вся доска целиком " +
+                "и её края были хорошо видны."
+    }
 }
 
 /**

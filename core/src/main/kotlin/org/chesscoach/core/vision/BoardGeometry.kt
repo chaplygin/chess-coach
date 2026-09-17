@@ -281,7 +281,40 @@ private fun detectLines(image: GrayImage): List<Line> {
         }
     }
 
-    val threshold = edgeThreshold(magnitude)
+    // Утоньшение края до одного пикселя поперёк (как в детекторе Канни).
+    // Без него граница клетки шириной в два-три пикселя раскладывалась на две
+    // соседние ячейки накопителя, и каждая набирала половину голосов: линии
+    // доски оказывались слабее одной жирной линии стола, хотя длиннее её.
+    val thin = DoubleArray(width * height)
+    for (y in 2 until height - 2) {
+        for (x in 2 until width - 2) {
+            val index = y * width + x
+            val value = magnitude[index]
+            if (value <= 0.0) continue
+            val angle = direction[index]
+            // Направление градиента округляется до одного из четырёх: сравнивать
+            // надо именно поперёк края, вдоль края соседи законно такие же.
+            val sector = Math.floorMod(Math.round(angle * 4 / PI).toInt(), 4)
+            val stepX = when (sector) {
+                0 -> 1
+                1 -> 1
+                2 -> 0
+                else -> -1
+            }
+            val stepY = when (sector) {
+                0 -> 0
+                1 -> 1
+                2 -> 1
+                else -> 1
+            }
+            val before = magnitude[index - stepY * width - stepX]
+            val after = magnitude[index + stepY * width + stepX]
+            if (value < before || value < after) continue
+            thin[index] = value
+        }
+    }
+
+    val threshold = edgeThreshold(thin)
     val thetaBins = 180
     val cosTable = DoubleArray(thetaBins) { cos(it * PI / thetaBins) }
     val sinTable = DoubleArray(thetaBins) { sin(it * PI / thetaBins) }
@@ -294,7 +327,7 @@ private fun detectLines(image: GrayImage): List<Line> {
     for (y in 1 until height - 1) {
         for (x in 1 until width - 1) {
             val index = y * width + x
-            if (magnitude[index] < threshold) continue
+            if (thin[index] < threshold) continue
             // Направление градиента и есть нормаль прямой — голосовать за все
             // 180 углов незачем, достаточно узкой окрестности. Это разница
             // между десятками миллионов голосов и сотнями тысяч.
@@ -448,8 +481,11 @@ private fun splitIntoFamilies(image: GrayImage, lines: List<Line>): Families? {
             val toB = vector[0] * centerB[0] + vector[1] * centerB[1]
             assignment[index] = if (toA >= toB) 0 else 1
         }
-        centerA = meanDirection(vectors, assignment, 0) ?: return null
-        centerB = meanDirection(vectors, assignment, 1) ?: return null
+        // Опустевшая группа не повод сдаваться: оставляем прежний центр, и на
+        // следующем шаге к нему что-нибудь притянется. Ранний отказ здесь
+        // стоил потери доски на ровном месте — при наклоне 20 градусов.
+        centerA = meanDirection(vectors, assignment, 0) ?: centerA
+        centerB = meanDirection(vectors, assignment, 1) ?: centerB
     }
 
     val angleA = atan2(centerA[1], centerA[0]) / 2
@@ -1006,4 +1042,48 @@ private fun checkerQuality(board: GrayImage): CheckerQuality? {
     }
     if (total == 0) return null
     return CheckerQuality(correct.toDouble() / total, contrastSum / total)
+}
+
+internal fun debugGeometry(image: GrayImage): String {
+    val report = StringBuilder()
+    val scaled = downscale(image, WORK_MAX_SIDE)
+    val work = scaled.image
+    report.append("work " + work.width + "x" + work.height + " factor " + scaled.factor)
+    val lines = detectLines(work)
+    report.append(" | lines " + lines.size)
+    if (lines.isNotEmpty()) {
+        report.append(" | top: ")
+        for (line in lines.take(12)) {
+            report.append("(" + (line.angle() * 180 / PI).toInt() + "deg r=" + line.rho.toInt() + " v=" + line.votes.toInt() + ") ")
+        }
+    }
+    val families = splitIntoFamilies(work, lines)
+    if (families == null) {
+        report.append(" | FAMILIES null")
+        return report.toString()
+    }
+    report.append(" | famA " + families.first.lines.size + " pos " + families.first.positions.map { it.toInt() })
+    report.append(" | famB " + families.second.lines.size + " pos " + families.second.positions.map { it.toInt() })
+    val runsA = gridRuns(families.first, work)
+    val runsB = gridRuns(families.second, work)
+    report.append(" | runsA " + runsA.map { it.matched } + " runsB " + runsB.map { it.matched })
+    for (runA in runsA) {
+        for (runB in runsB) {
+            val quad = quadOf(runA, runB, work)
+            if (quad == null) {
+                report.append(" | quad REJECTED")
+                continue
+            }
+            val mapping = boardMapping(quad, VERIFY_SIZE)
+            if (mapping == null) {
+                report.append(" | mapping null")
+                continue
+            }
+            val quality = checkerQuality(warp(work, mapping, VERIFY_SIZE))
+            report.append(" | quad " + quad.corners.map { "" + it.x.toInt() + "," + it.y.toInt() } +
+                " grid " + (runA.matched + runB.matched) + "/18 checker " +
+                (quality?.consistency?.times(100))?.toInt() + " contrast " + quality?.contrast?.toInt())
+        }
+    }
+    return report.toString()
 }
