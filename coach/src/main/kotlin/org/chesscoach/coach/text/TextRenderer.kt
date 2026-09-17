@@ -255,25 +255,70 @@ object TextRenderer {
     // ——— ПЛАН ———
 
     private fun planBody(section: Section.Plan, glossary: Glossary, memory: RenderMemory, forkedSquares: Set<Square>): String? {
-        val lines = section.steps.mapNotNull { planStepSentence(it, glossary, memory, forkedSquares) }
+        // Шаги с одной и той же идеей сливаем в одну строку. Иначе план на
+        // три слабые пешки выглядит как заевшая пластинка: "Давить на слабую
+        // пешку соперника" трижды подряд, меняется только поле.
+        val lines = section.steps
+            .groupBy { it.idea }
+            .mapNotNull { (idea, steps) ->
+                planStepSentence(idea, steps.flatMap { it.facts }, glossary, memory, forkedSquares)
+            }
         if (lines.isEmpty()) return null
         return lines.joinToString(System.lineSeparator())
     }
 
-    private fun planStepSentence(step: PlanStep, glossary: Glossary, memory: RenderMemory, forkedSquares: Set<Square>): String? {
-        val facts = statementsFor(step.facts, forkedSquares, glossary, memory)
-        if (facts.isEmpty()) return null
+    private fun planStepSentence(
+        idea: PlanIdea,
+        facts: List<Fact>,
+        glossary: Glossary,
+        memory: RenderMemory,
+        forkedSquares: Set<Square>,
+    ): String? {
+        // План перечисляет цели, а не пересказывает признаки: три подряд
+        // предложения "пешка на d5 изолирована" отличаются одним полем и
+        // читаются как заевшая пластинка.
+        val targets = facts.mapNotNull(::planTarget).distinct()
+        if (targets.size == facts.size && targets.size > 1) {
+            return planIdeaPhrase(idea, targets.size) + ": " + russianList(targets) + "."
+        }
+
+        val statements = statementsFor(facts, forkedSquares, glossary, memory)
+        if (statements.isEmpty()) return null
         // factStatement собирает самостоятельное предложение с заглавной буквы;
         // тут оно идёт придаточным после двоеточия, поэтому строчная уместнее.
-        return "${planIdeaPhrase(step.idea)}: ${facts.joinToString(" ") { decapitalize(it) }}"
+        return planIdeaPhrase(idea, statements.size) + ": " +
+            statements.joinToString(" ") { decapitalize(it) }
     }
 
-    private fun planIdeaPhrase(idea: PlanIdea): String = when (idea) {
-        PlanIdea.OCCUPY_OUTPOST -> "Держать фигуру на форпосте"
-        PlanIdea.OPEN_FILE_FOR_ROOK -> "Держать ладью на открытой линии"
-        PlanIdea.ADVANCE_PASSED_PAWN -> "Двигать проходную пешку вперёд"
+    /**
+     * Поле, на которое смотрит шаг плана.
+     *
+     * Null для признаков, у которых одного поля не бывает: для них остаётся
+     * обычное предложение, а не строка перечисления.
+     */
+    private fun planTarget(fact: Fact): String? = when (fact) {
+        is PawnWeaknessFact -> fact.square.value().lowercase()
+        is PassedPawnFact -> fact.square.value().lowercase()
+        is OutpostFact -> fact.square.value().lowercase()
+        is OpenFileRookFact -> fact.rook.value().lowercase()
+        else -> null
+    }
+
+    /** [count] — сколько признаков попало в один шаг: от этого зависит число в фразе. */
+    private fun planIdeaPhrase(idea: PlanIdea, count: Int): String = when (idea) {
+        PlanIdea.OCCUPY_OUTPOST ->
+            if (count > 1) "Держать фигуры на форпостах" else "Держать фигуру на форпосте"
+
+        PlanIdea.OPEN_FILE_FOR_ROOK ->
+            if (count > 1) "Держать ладьи на открытых линиях" else "Держать ладью на открытой линии"
+
+        PlanIdea.ADVANCE_PASSED_PAWN ->
+            if (count > 1) "Двигать проходные пешки вперёд" else "Двигать проходную пешку вперёд"
+
+        PlanIdea.TARGET_WEAK_PAWN ->
+            if (count > 1) "Давить на слабые пешки соперника" else "Давить на слабую пешку соперника"
+
         PlanIdea.ATTACK_KING -> "Продолжать давление на короля"
-        PlanIdea.TARGET_WEAK_PAWN -> "Давить на слабую пешку соперника"
         PlanIdea.IMPROVE_WORST_PIECE -> "Улучшать положение худшей фигуры"
         PlanIdea.CENTRALISE -> "Централизовать фигуры"
         PlanIdea.TRADE_INTO_ENDGAME -> "Стремиться к выгодному эндшпилю через размены"
@@ -578,8 +623,12 @@ object TextRenderer {
         }
 
         is OutpostFact -> {
-            val name = capitalize(PieceLexicon.name(pieceTypeOf(fact.piece)))
-            "$name на ${sq(fact.square)} стоит форпостом — пешкой её оттуда не согнать."
+            val type = pieceTypeOf(fact.piece)
+            val name = capitalize(PieceLexicon.name(type))
+            // Местоимение согласуется с фигурой: конь — "его", ладья — "её".
+            val it = if (PieceLexicon.genderOf(type) == Gender.MASCULINE) "его" else "её"
+            name + " на " + sq(fact.square) + " стоит форпостом — пешкой " + it +
+                " оттуда не согнать."
         }
 
         is OpenFileRookFact -> {

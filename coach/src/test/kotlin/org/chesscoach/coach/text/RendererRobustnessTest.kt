@@ -1,7 +1,12 @@
 package org.chesscoach.coach.text
 
 import com.github.bhlangonijr.chesslib.Side
+import com.github.bhlangonijr.chesslib.Piece
+import com.github.bhlangonijr.chesslib.Square
 import org.chesscoach.coach.model.Evidence
+import org.chesscoach.coach.model.OutpostFact
+import org.chesscoach.coach.model.PlanIdea
+import org.chesscoach.coach.model.PlanStep
 import org.chesscoach.coach.model.FeatureSet
 import org.chesscoach.coach.model.PositionExplanation
 import org.chesscoach.coach.model.ProphylaxisFact
@@ -92,5 +97,27 @@ class RendererRobustnessTest {
         )
 
         assertTrue(text, !text.contains("раскрывается в варианте"))
+    }
+
+    @Test
+    fun `местоимение форпоста согласуется с фигурой`() {
+        val knight = OutpostFact(
+            square = Square.D5,
+            piece = Piece.WHITE_KNIGHT,
+            owner = Side.WHITE,
+            favours = Side.WHITE,
+            evidence = Evidence.of(Square.D5),
+        )
+        val rook = knight.copy(piece = Piece.WHITE_ROOK)
+
+        val knightText = TextRenderer.render(explanationWith(Section.Plan(listOf(
+            PlanStep(PlanIdea.OCCUPY_OUTPOST, listOf(knight), Evidence.of(Square.D5)),
+        ))))
+        val rookText = TextRenderer.render(explanationWith(Section.Plan(listOf(
+            PlanStep(PlanIdea.OCCUPY_OUTPOST, listOf(rook), Evidence.of(Square.D5)),
+        ))))
+
+        assertTrue(knightText, knightText.contains("пешкой его оттуда не согнать"))
+        assertTrue(rookText, rookText.contains("пешкой её оттуда не согнать"))
     }
 }

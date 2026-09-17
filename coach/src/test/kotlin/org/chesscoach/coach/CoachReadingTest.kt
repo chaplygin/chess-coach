@@ -27,7 +27,9 @@ class CoachReadingTest {
         LocalStockfishClient(binary!!).use { engine ->
             val coach = CoachEngine(engine)
             runBlocking {
-                fixtures.take(6).forEach { fixture ->
+                // По одной задаче на тему: смотреть шесть однотипных вилок
+                // бесполезно, а рентген и последняя горизонталь звучат иначе.
+                fixtures.distinctBy { it.theme }.forEach { fixture ->
                     println()
                     println("=".repeat(72))
                     println("Задача " + fixture.id + ", тема " + fixture.theme +
