@@ -11,7 +11,7 @@ import androidx.compose.ui.platform.LocalContext
 import org.chesscoach.app.AppContainer
 import org.chesscoach.core.GameSummary
 
-enum class Screen { LOGIN, GAMES, REVIEW, ENGINE, LIVE }
+enum class Screen { LOGIN, MENU, GAMES, PHOTO, REVIEW, ENGINE, LIVE, SETTINGS }
 
 @Composable
 fun AppRoot(redirect: Uri?, onRedirectHandled: () -> Unit) {
@@ -19,7 +19,7 @@ fun AppRoot(redirect: Uri?, onRedirectHandled: () -> Unit) {
     val container = remember { AppContainer.get(context) }
 
     var screen by remember {
-        mutableStateOf(if (container.tokenStore.isSignedIn()) Screen.GAMES else Screen.LOGIN)
+        mutableStateOf(if (container.tokenStore.isSignedIn()) Screen.MENU else Screen.LOGIN)
     }
     var authError by remember { mutableStateOf<String?>(null) }
     var completingLogin by remember { mutableStateOf(false) }
@@ -39,7 +39,7 @@ fun AppRoot(redirect: Uri?, onRedirectHandled: () -> Unit) {
         authError = null
 
         container.lichessOAuth.completeAuthorization(uri)
-            .onSuccess { screen = Screen.GAMES }
+            .onSuccess { screen = Screen.MENU }
             .onFailure { authError = it.message ?: "Не удалось войти" }
 
         completingLogin = false
@@ -54,18 +54,31 @@ fun AppRoot(redirect: Uri?, onRedirectHandled: () -> Unit) {
             onOpenEngineCheck = { screen = Screen.ENGINE },
         )
 
-        Screen.GAMES -> GameListScreen(
+        Screen.MENU -> MainMenuScreen(
             container = container,
+            onOpenGames = { screen = Screen.GAMES },
+            onOpenPhoto = { screen = Screen.PHOTO },
+            onOpenLiveGame = { screen = Screen.LIVE },
+            onOpenEngineCheck = { screen = Screen.ENGINE },
+            onOpenSettings = { screen = Screen.SETTINGS },
             onSignOut = {
                 container.tokenStore.signOut()
                 screen = Screen.LOGIN
             },
+        )
+
+        Screen.GAMES -> GameListScreen(
+            container = container,
+            onBack = { screen = Screen.MENU },
             onOpenGame = { game ->
                 selectedGame = game
                 screen = Screen.REVIEW
             },
-            onOpenEngineCheck = { screen = Screen.ENGINE },
-            onOpenLiveGame = { screen = Screen.LIVE },
+        )
+
+        Screen.PHOTO -> PhotoAnalysisScreen(
+            container = container,
+            onBack = { screen = Screen.MENU },
         )
 
         Screen.REVIEW -> {
@@ -84,13 +97,19 @@ fun AppRoot(redirect: Uri?, onRedirectHandled: () -> Unit) {
         Screen.ENGINE -> EngineScreen(
             container = container,
             onBack = {
-                screen = if (container.tokenStore.isSignedIn()) Screen.GAMES else Screen.LOGIN
+                screen = if (container.tokenStore.isSignedIn()) Screen.MENU else Screen.LOGIN
             },
         )
 
         Screen.LIVE -> LiveGameScreen(
             container = container,
-            onBack = { screen = Screen.GAMES },
+            onBack = { screen = Screen.MENU },
+        )
+
+        Screen.SETTINGS -> SettingsScreen(
+            container = container,
+            onBack = { screen = Screen.MENU },
+            onSignedOut = { screen = Screen.LOGIN },
         )
     }
 }

@@ -39,10 +39,8 @@ import java.time.format.DateTimeFormatter
 @Composable
 fun GameListScreen(
     container: AppContainer,
-    onSignOut: () -> Unit,
+    onBack: () -> Unit,
     onOpenGame: (GameSummary) -> Unit,
-    onOpenEngineCheck: () -> Unit,
-    onOpenLiveGame: () -> Unit,
 ) {
     var games by remember { mutableStateOf<List<GameSummary>>(emptyList()) }
     var username by remember { mutableStateOf(container.tokenStore.username()) }
@@ -86,7 +84,7 @@ fun GameListScreen(
                 Text("Мои партии", style = MaterialTheme.typography.headlineSmall)
                 username?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             }
-            TextButton(onClick = onSignOut) { Text("Выйти") }
+            TextButton(onClick = onBack) { Text("В меню") }
         }
 
         when {
@@ -124,10 +122,6 @@ fun GameListScreen(
             }
         }
 
-        Row {
-            TextButton(onClick = onOpenLiveGame) { Text("Текущая партия") }
-            TextButton(onClick = onOpenEngineCheck) { Text("Проверить движок") }
-        }
     }
 }
 
