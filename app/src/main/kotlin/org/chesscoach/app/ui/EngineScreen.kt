@@ -29,11 +29,13 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import org.chesscoach.app.AppContainer
-import org.chesscoach.core.mapCatchingNonCancellation
 import org.chesscoach.core.MoveNotation
 import org.chesscoach.core.ScoreFormat
 import org.chesscoach.engine.AnalysisResult
 import org.chesscoach.engine.SearchLimits
+
+/** Сколько линий проверка запрашивает, если калибровка телефона это позволяет. */
+private const val PREFERRED_MULTI_PV = 3
 
 private data class Preset(val title: String, val fen: String)
 
@@ -72,8 +74,11 @@ fun EngineScreen(container: AppContainer, onBack: () -> Unit) {
         error = null
         result = null
 
-        container.engine.analyzer()
-            .mapCatchingNonCancellation { it.analyze(preset.fen, SearchLimits(movetimeMs = 1500, multiPv = 3)) }
+        // container.engine.analyze устойчив к падению движка (M8): перезапускает
+        // процесс и один раз повторяет запрос сам, экрану ничего лишнего делать
+        // не нужно. MultiPV ограничен калибровкой под конкретный телефон.
+        val multiPv = PREFERRED_MULTI_PV.coerceAtMost(container.engine.multiPvCap())
+        container.engine.analyze(preset.fen, SearchLimits(movetimeMs = 1500, multiPv = multiPv))
             .onSuccess { result = it }
             .onFailure { error = "${it::class.java.simpleName}: ${it.message}" }
 

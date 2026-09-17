@@ -25,8 +25,6 @@ class GameAnalysisRunner(private val engine: EngineController) {
     ): Result<List<PlyEvaluation>> {
         if (positions.isEmpty()) return Result.success(emptyList())
 
-        val analyzer = engine.analyzer().getOrElse { return Result.failure(it) }
-
         // n+1 различных позиций на n полуходов: fenBefore первого хода и
         // fenAfter каждого хода. Одна и та же позиция никогда не считается
         // дважды, даже если это fenAfter одного хода и fenBefore следующего.
@@ -37,7 +35,11 @@ class GameAnalysisRunner(private val engine: EngineController) {
         val scores = ArrayList<Score>(fens.size)
 
         for ((index, fen) in fens.withIndex()) {
-            val result = analyzer.analyze(fen, SearchLimits(movetimeMs = MOVETIME_MS, multiPv = 1))
+            // engine.analyze сам перезапускает упавший процесс движка и один
+            // раз повторяет запрос — скан партии на 80 полуходов не должен
+            // падать целиком из-за одного сбойного обращения к движку.
+            val result = engine.analyze(fen, SearchLimits(movetimeMs = MOVETIME_MS, multiPv = 1))
+                .getOrElse { return Result.failure(it) }
             val score = result.lines.firstOrNull()?.score
                 ?: terminalScoreOrNull(fen)
                 ?: return Result.failure(

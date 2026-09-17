@@ -31,10 +31,18 @@ class StockfishAnalyzer(private val process: StockfishProcess) {
 
     private var configuredMultiPv: Int = -1
 
+    /** Имя и версия движка из строки `id name ...` рукопожатия UCI — для экрана настроек. */
+    var engineId: String? = null
+        private set
+
     suspend fun initialise(threads: Int = DEFAULT_THREADS, hashMb: Int = DEFAULT_HASH_MB) {
         withContext(Dispatchers.IO) {
-            process.request("uci", HANDSHAKE_TIMEOUT_MS) { it.trim() == "uciok" }
+            val handshake = process.request("uci", HANDSHAKE_TIMEOUT_MS) { it.trim() == "uciok" }
                 ?: error("Движок не ответил uciok")
+
+            engineId = handshake.firstOrNull { it.startsWith("id name ") }
+                ?.removePrefix("id name ")
+                ?.trim()
 
             process.send("setoption name Threads value $threads")
             process.send("setoption name Hash value $hashMb")

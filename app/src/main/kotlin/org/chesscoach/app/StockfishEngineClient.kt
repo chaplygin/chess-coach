@@ -4,7 +4,6 @@ import org.chesscoach.coach.engine.CoachSearchLimits
 import org.chesscoach.coach.engine.EngineClient
 import org.chesscoach.core.EngineLine
 import org.chesscoach.engine.EngineController
-import org.chesscoach.core.catchingNonCancellation
 import org.chesscoach.engine.SearchLimits
 
 /**
@@ -17,19 +16,19 @@ import org.chesscoach.engine.SearchLimits
 class StockfishEngineClient(private val controller: EngineController) : EngineClient {
 
     override suspend fun analyse(fen: String, limits: CoachSearchLimits): List<EngineLine> {
-        val analyzer = controller.analyzer().getOrElse { return emptyList() }
-        // Отмена — не "движок молчит": пустой список в этом случае заставил
-        // бы тренера собрать разбор без единой строки движка вместо того,
-        // чтобы честно свернуться вместе с экраном.
-        return catchingNonCancellation {
-            analyzer.analyze(
-                fen,
-                SearchLimits(
-                    movetimeMs = limits.movetimeMs.toInt(),
-                    depth = limits.depth,
-                    multiPv = limits.multiPv,
-                ),
-            ).lines
-        }.getOrDefault(emptyList())
+        // На слабом телефоне три линии MultiPV отъедают глубину поиска —
+        // калибровка (M8) ограничивает запрос тренера тем, что телефон
+        // реально тянет.
+        val multiPv = limits.multiPv.coerceAtMost(controller.multiPvCap())
+
+        // controller.analyze уже перезапускает упавший процесс движка и один
+        // раз повторяет запрос. Отмена — не "движок молчит": пустой список в
+        // этом случае заставил бы тренера собрать разбор без единой строки
+        // движка вместо того, чтобы честно свернуться вместе с экраном, —
+        // поэтому CancellationException из analyze долетает наружу как есть.
+        return controller.analyze(
+            fen,
+            SearchLimits(movetimeMs = limits.movetimeMs.toInt(), depth = limits.depth, multiPv = multiPv),
+        ).getOrNull()?.lines ?: emptyList()
     }
 }

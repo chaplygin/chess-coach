@@ -83,4 +83,9 @@ object GameAnalysisStore {
         val payload = StoredGameAnalysis(gameId, evaluations.map { StoredPlyEvaluation.of(it) })
         target.writeText(json.encodeToString(StoredGameAnalysis.serializer(), payload))
     }
+
+    /** Удаляет весь кэш разборов (filesDir/analysis) — экран настроек, "Очистить кэш". */
+    fun clearAll(context: Context) {
+        File(context.filesDir, "analysis").deleteRecursively()
+    }
 }
