@@ -17,3 +17,6 @@ app/src/main/jniLibs/
 hs_err_pid*.log
 replay_pid*.log
 .kotlin/
+
+# Рабочие копии суб-агентов
+.claude/worktrees/
