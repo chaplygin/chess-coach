@@ -1,9 +1,5 @@
 package org.chesscoach.core.vision
 
-import java.awt.Color
-import java.awt.Font
-import java.awt.RenderingHints
-import java.awt.image.BufferedImage
 import java.util.Locale
 import org.chesscoach.core.BoardLayout
 import org.junit.Assert.assertEquals
@@ -23,14 +19,6 @@ import org.junit.Test
  */
 class PrototypeCalibrationTest {
 
-    private val lightColor = Color(0xED, 0xD6, 0xB0)
-    private val darkColor = Color(0xB5, 0x88, 0x63)
-
-    private val solidGlyphs = mapOf(
-        'k' to "♚", 'q' to "♛", 'r' to "♜",
-        'b' to "♝", 'n' to "♞", 'p' to "♟",
-    )
-
     /**
      * Доски для калибровки — со смешанным набором фигур, а не по одной фигуре
      * на доску: рост теперь меряется от самой высокой фигуры рядом, и на доске
@@ -49,7 +37,7 @@ class PrototypeCalibrationTest {
         val collected = mutableMapOf<Char, MutableList<DoubleArray>>()
         for (position in calibrationPositions) {
             val placement = BoardLayout.parsePlacement(position)
-            val signatures = cellSignatures(renderBoard(position))
+            val signatures = cellSignatures(SyntheticBoard.render(position))
             for (index in 0 until 64) {
                 val piece = placement[index] ?: continue
                 val signature = signatures[index] ?: continue
@@ -97,45 +85,6 @@ class PrototypeCalibrationTest {
         return "Prototype(RecognizedPieceType." + name + ", " + numbers + "),"
     }
 
-    private fun renderBoard(placementFen: String): GrayImage {
-        val boardPixels = 480
-        val cellSize = boardPixels / 8
-        val image = BufferedImage(boardPixels, boardPixels, BufferedImage.TYPE_INT_RGB)
-        val g = image.createGraphics()
-        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-        g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON)
-
-        for (row in 0 until 8) {
-            for (col in 0 until 8) {
-                g.color = if ((row + col) % 2 == 0) lightColor else darkColor
-                g.fillRect(col * cellSize, row * cellSize, cellSize, cellSize)
-            }
-        }
-
-        val placement = BoardLayout.parsePlacement(placementFen)
-        g.font = Font("SansSerif", Font.PLAIN, (cellSize * 0.8).toInt())
-        val metrics = g.fontMetrics
-        for (row in 0 until 8) {
-            for (col in 0 until 8) {
-                val piece = placement[row * 8 + col] ?: continue
-                val glyph = solidGlyphs.getValue(piece.lowercaseChar())
-                g.color = if (piece.isUpperCase()) Color.WHITE else Color.BLACK
-                val textWidth = metrics.stringWidth(glyph)
-                val x = col * cellSize + (cellSize - textWidth) / 2
-                val y = row * cellSize + cellSize / 2 + metrics.ascent / 2 - metrics.descent / 4
-                g.drawString(glyph, x, y)
-            }
-        }
-        g.dispose()
-
-        val pixels = IntArray(boardPixels * boardPixels)
-        for (y in 0 until boardPixels) {
-            for (x in 0 until boardPixels) {
-                pixels[y * boardPixels + x] = image.getRGB(x, y) and 0xFFFFFF
-            }
-        }
-        return GrayImage(boardPixels, boardPixels, pixels)
-    }
 }
 
 private const val FEATURE_COUNT = 8

@@ -1,9 +1,5 @@
 package org.chesscoach.core.vision
 
-import java.awt.Color
-import java.awt.Font
-import java.awt.RenderingHints
-import java.awt.image.BufferedImage
 import org.chesscoach.core.BoardLayout
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -21,22 +17,6 @@ import org.junit.Test
  * в вывод теста и идут в отчёт как есть.
  */
 class BoardRecognizerTest {
-
-    private val lightColor = Color(0xED, 0xD6, 0xB0)
-    private val darkColor = Color(0xB5, 0x88, 0x63)
-
-    /**
-     * Силуэты фигур — одна и та же "сплошная" форма Unicode для обеих сторон,
-     * а не пара "белый контур / чёрная заливка", которой :app рисует доску на
-     * экране. Причина: настоящая белая фигура на фотографии — такой же
-     * сплошной силуэт, как и чёрная, просто светлее фона, а не полый контур с
-     * дыркой на месте короны. Эталоны в BoardRecognizer откалиброваны на эти
-     * же сплошные формы, поэтому и тест рисует ими.
-     */
-    private val solidGlyphs = mapOf(
-        'k' to "♚", 'q' to "♛", 'r' to "♜",
-        'b' to "♝", 'n' to "♞", 'p' to "♟",
-    )
 
     private val startingPosition =
         "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR"
@@ -86,7 +66,7 @@ class BoardRecognizerTest {
         val confidenceWhenWrong = mutableListOf<Double>()
 
         for ((label, fen) in testPositions) {
-            val image = renderBoardImage(fen, boardPixels = 480)
+            val image = SyntheticBoard.render(fen, boardPixels = 480)
             val raw = readAllCells(image)
             assertNotNull("Доска не нашлась на синтетическом снимке: $label", raw)
             checkNotNull(raw)
@@ -203,50 +183,9 @@ class BoardRecognizerTest {
     }
 
     /** Рисуем доску клетками двух цветов и фигуры символами Unicode покрупнее. */
-    private fun renderBoardImage(fen: String, boardPixels: Int): GrayImage {
-        val cellSize = boardPixels / 8
-        val image = BufferedImage(boardPixels, boardPixels, BufferedImage.TYPE_INT_RGB)
-        val g = image.createGraphics()
-        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-        g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON)
-
-        for (row in 0 until 8) {
-            for (col in 0 until 8) {
-                val isLight = (row + col) % 2 == 0
-                g.color = if (isLight) lightColor else darkColor
-                g.fillRect(col * cellSize, row * cellSize, cellSize, cellSize)
-            }
-        }
-
-        val placement = BoardLayout.parsePlacement(fen)
-        g.font = Font("SansSerif", Font.PLAIN, (cellSize * 0.8).toInt())
-        val metrics = g.fontMetrics
-
-        for (row in 0 until 8) {
-            for (col in 0 until 8) {
-                val piece = placement[row * 8 + col] ?: continue
-                val glyph = solidGlyphs[piece.lowercaseChar()] ?: continue
-                g.color = if (piece.isUpperCase()) Color.WHITE else Color.BLACK
-                val textWidth = metrics.stringWidth(glyph)
-                val x = col * cellSize + (cellSize - textWidth) / 2
-                val y = row * cellSize + cellSize / 2 + metrics.ascent / 2 - metrics.descent / 4
-                g.drawString(glyph, x, y)
-            }
-        }
-        g.dispose()
-
-        val pixels = IntArray(boardPixels * boardPixels)
-        for (y in 0 until boardPixels) {
-            for (x in 0 until boardPixels) {
-                pixels[y * boardPixels + x] = image.getRGB(x, y) and 0xFFFFFF
-            }
-        }
-        return GrayImage(boardPixels, boardPixels, pixels)
-    }
-
     @Test
     fun `итоговый recognize отдаёт валидный FEN на стартовой позиции`() {
-        val image = renderBoardImage(startingPosition, boardPixels = 480)
+        val image = SyntheticBoard.render(startingPosition, boardPixels = 480)
         val result = BoardRecognizer.recognize(image, whiteToMove = true)
         println("recognize() на стартовой позиции: $result")
         // Стартовая позиция на чистом синтетическом снимке распознаётся без единой
@@ -269,7 +208,7 @@ class BoardRecognizerTest {
         // но никогда не тихий Recognized с невозможной позицией. Сама ветка
         // проверки легальности проверяется отдельно, напрямую, ниже.
         val illegalFen = "8/8/3k4/8/2N1n3/8/2K1K3/8"
-        val image = renderBoardImage(illegalFen, boardPixels = 480)
+        val image = SyntheticBoard.render(illegalFen, boardPixels = 480)
         val result = BoardRecognizer.recognize(image, whiteToMove = true)
         println("recognize() на позиции с двумя королями: $result")
 
