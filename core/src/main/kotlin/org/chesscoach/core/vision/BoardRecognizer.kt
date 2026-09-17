@@ -105,9 +105,8 @@ internal class RawCellReadings(val letters: List<Char?>, val confidence: List<Do
  */
 internal fun cellSignatures(image: GrayImage): List<DoubleArray?> {
     val region = findBoardRegion(image) ?: return List(64) { null }
-    val features = readShapes(image, region)
-    return features.map { cell ->
-        cell?.let {
+    return readBoard(image, region).map { cell ->
+        cell.shape?.let {
             doubleArrayOf(
                 it.heightFrac,
                 it.aspect,
@@ -121,6 +120,14 @@ internal fun cellSignatures(image: GrayImage): List<DoubleArray?> {
         }
     }
 }
+
+/** Всё, что прочитано об одной клетке до того, как решается тип фигуры. */
+private class ScannedCell(
+    val occupied: Boolean,
+    val occupancyConfidence: Double,
+    val meanForeground: Double,
+    val shape: ShapeFeatures?,
+)
 
 /**
  * Один проход по всей доске: чтение клеток плюс приведение роста фигур к
@@ -136,69 +143,165 @@ internal fun cellSignatures(image: GrayImage): List<DoubleArray?> {
  * возможной позиции на доске есть оба короля, то есть мерка всегда на месте и не
  * зависит ни от набора фигур, ни от того, как близко снята доска.
  */
-private fun readShapes(image: GrayImage, region: BoardRegion): List<ShapeFeatures?> {
-    val raw = arrayOfNulls<ShapeFeatures>(64)
+private fun readBoard(image: GrayImage, region: BoardRegion): List<ScannedCell> {
+    val scanned = ArrayList<ScannedCell>(64)
 
     for (row in 0 until 8) {
         for (col in 0 until 8) {
             val cell = extractCell(image, region, row, col)
             val expectedLight = (row + col) % 2 == region.lightParity
-            val backgroundRef = if (expectedLight) region.lightAvg else region.darkAvg
+            val globalRef = if (expectedLight) region.lightAvg else region.darkAvg
+            // Фон берётся из каёмки самой клетки, а к среднему по доске мы
+            // откатываемся только если каёмка занята фигурой соседней клетки.
+            // На снимке живой доски освещение неравномерно: один край ярче
+            // другого сильнее, чем светлая клетка отличается от тёмной, и
+            // среднее по доске там просто неверно.
+            val localRef = borderBackground(cell) ?: globalRef
             // Порог контраста подстраивается под контраст самой доски: у тёмных
             // деревянных досок разница между клетками меньше, чем у ярких
             // пластиковых, и фиксированное число било бы мимо в обе стороны.
-            val contrastScale = max(18.0, abs(region.lightAvg - region.darkAvg) / 3.0)
-            val reading = readCell(cell, backgroundRef, contrastScale)
-            if (!reading.occupied) continue
-            raw[row * 8 + col] = shapeFeatures(reading.mask, cell.width, cell.height)
+            val boardContrast = max(18.0, abs(region.lightAvg - region.darkAvg) / 3.0)
+            // И под освещение конкретной клетки. Свет действует умножением: в
+            // затенённом углу доски все яркости меньше в одно и то же число раз,
+            // а вместе с ними и разница между фигурой и полем. Общий порог там
+            // оказывается слишком высоким, и фигура в тени читается как пустая
+            // клетка — на замере с неровным светом это и было главной потерей.
+            val illumination = if (globalRef > 1.0) (localRef / globalRef).coerceIn(0.35, 2.5) else 1.0
+            val contrastScale = max(8.0, boardContrast * illumination)
+            val reading = readCell(cell, localRef, contrastScale)
+            val shape = if (reading.occupied) shapeFeatures(reading.mask, cell.width, cell.height) else null
+            scanned.add(
+                ScannedCell(reading.occupied, reading.occupancyConfidence, reading.meanForeground, shape)
+            )
         }
     }
 
-    val tallest = raw.filterNotNull().maxOfOrNull { it.heightFrac } ?: return raw.toList()
-    if (tallest <= 0.0) return raw.toList()
-    return raw.map { it?.copy(heightFrac = it.heightFrac / tallest) }
+    val tallest = scanned.mapNotNull { it.shape?.heightFrac }.maxOrNull() ?: return scanned
+    if (tallest <= 0.0) return scanned
+    return scanned.map { cell ->
+        val shape = cell.shape ?: return@map cell
+        ScannedCell(
+            cell.occupied,
+            cell.occupancyConfidence,
+            cell.meanForeground,
+            shape.copy(heightFrac = shape.heightFrac / tallest),
+        )
+    }
 }
 
 /** null, если квадрат доски вообще не нашёлся (см. [findBoardRegion]). */
 internal fun readAllCells(image: GrayImage): RawCellReadings? {
     val region = findBoardRegion(image) ?: return null
-    val shapes = readShapes(image, region)
+    val scanned = readBoard(image, region)
+    val colors = colorSplit(scanned)
 
     val cellLetters = arrayOfNulls<Char>(64)
     val cellConfidence = DoubleArray(64)
     val cellOccupied = BooleanArray(64)
 
-    for (row in 0 until 8) {
-        for (col in 0 until 8) {
-            val index = row * 8 + col
-            val cell = extractCell(image, region, row, col)
-            val expectedLight = (row + col) % 2 == region.lightParity
-            val backgroundRef = if (expectedLight) region.lightAvg else region.darkAvg
-            val contrastScale = max(18.0, abs(region.lightAvg - region.darkAvg) / 3.0)
-            val reading = readCell(cell, backgroundRef, contrastScale)
-
-            if (!reading.occupied) {
-                cellConfidence[index] = reading.occupancyConfidence
-                continue
-            }
-
-            cellOccupied[index] = true
-            val features = shapes[index]
-            if (features == null) {
-                // occupied=true, но силуэт не вычислился (пустая маска на границе
-                // порога) — честнее отметить клетку непрочитанной, чем гадать.
-                cellConfidence[index] = 0.0
-                continue
-            }
-
-            val (type, typeConfidence) = classifyPieceType(features)
-            val combined = minOf(reading.occupancyConfidence, reading.colorConfidence, typeConfidence)
-            cellLetters[index] = pieceLetter(type, reading.isWhite)
-            cellConfidence[index] = combined
+    for (index in 0 until 64) {
+        val cell = scanned[index]
+        if (!cell.occupied) {
+            cellConfidence[index] = cell.occupancyConfidence
+            continue
         }
+
+        cellOccupied[index] = true
+        val shape = cell.shape
+        if (shape == null) {
+            // occupied=true, но силуэт не вычислился (пустая маска на границе
+            // порога) — честнее отметить клетку непрочитанной, чем гадать.
+            cellConfidence[index] = 0.0
+            continue
+        }
+
+        val (type, typeConfidence) = classifyPieceType(shape)
+        val combined = minOf(cell.occupancyConfidence, colors.confidence(cell.meanForeground), typeConfidence)
+        cellLetters[index] = pieceLetter(type, colors.isWhite(cell.meanForeground))
+        cellConfidence[index] = combined
     }
 
     return RawCellReadings(cellLetters.toList(), cellConfidence.toList(), cellOccupied.toList())
+}
+
+/**
+ * Граница между белыми и чёрными фигурами, посчитанная по самой доске.
+ *
+ * Абсолютный порог "ярче половины шкалы — значит белая" верен для экрана, где
+ * фигуры почти чисто белые и чёрные, и неверен для настоящего набора: там
+ * "белая" фигура кремовая, "чёрная" тёмно-коричневая, и обе могут оказаться по
+ * одну сторону от середины шкалы. Поэтому порог ищется между двумя скоплениями
+ * яркости прямо на этом снимке — методом Оцу, то есть перебором границы с
+ * максимальной межгрупповой дисперсией.
+ */
+private class ColorSplit(val threshold: Double, val separation: Double) {
+
+    fun isWhite(meanForeground: Double): Boolean = meanForeground > threshold
+
+    /**
+     * Уверенность падает и когда фигура близка к границе, и когда сами
+     * скопления плохо разделены: во втором случае неуверенны все клетки сразу,
+     * и это верно — на снимке, где фигуры обоих цветов неразличимы, нечего
+     * показывать с уверенным видом.
+     */
+    fun confidence(meanForeground: Double): Double {
+        if (separation < MIN_COLOR_SEPARATION) return 0.0
+        return (abs(meanForeground - threshold) / (separation / 2.0)).coerceIn(0.0, 1.0)
+    }
+}
+
+/**
+ * Ниже этой разницы средней яркости между двумя группами фигур считается, что
+ * цвета на снимке не разделяются вовсе. Взято заметно выше шума яркости внутри
+ * одной фигуры, но заметно ниже разницы кремового и тёмного дерева.
+ */
+private const val MIN_COLOR_SEPARATION = 30.0
+
+private fun colorSplit(scanned: List<ScannedCell>): ColorSplit {
+    val values = scanned.filter { it.occupied }.map { it.meanForeground }.sorted()
+    if (values.size < 2) return ColorSplit(127.5, 255.0)
+
+    var bestThreshold = 127.5
+    var bestScore = -1.0
+    var bestSeparation = 0.0
+    for (cut in 1 until values.size) {
+        val low = values.subList(0, cut)
+        val high = values.subList(cut, values.size)
+        val lowMean = low.average()
+        val highMean = high.average()
+        // Межгрупповая дисперсия: чем крупнее обе группы и чем дальше их
+        // средние, тем лучше граница между ними.
+        val score = low.size.toDouble() * high.size * (highMean - lowMean) * (highMean - lowMean)
+        if (score > bestScore) {
+            bestScore = score
+            bestThreshold = (lowMean + highMean) / 2.0
+            bestSeparation = highMean - lowMean
+        }
+    }
+
+    return ColorSplit(bestThreshold, bestSeparation)
+}
+
+/**
+ * Яркость фона клетки по её каёмке.
+ *
+ * Фигура стоит в середине клетки, поэтому каёмка — это почти наверняка само
+ * поле. Берётся медиана, а не среднее: край фигуры, заехавший в каёмку,
+ * сдвинул бы среднее, а медиану нет. null — если каёмка слишком узкая, чтобы
+ * судить (крошечная клетка на мелком снимке).
+ */
+private fun borderBackground(cell: Cell): Double? {
+    val band = maxOf(1, minOf(cell.width, cell.height) / 6)
+    val ring = ArrayList<Int>(2 * band * (cell.width + cell.height))
+    for (y in 0 until cell.height) {
+        for (x in 0 until cell.width) {
+            val onBorder = x < band || y < band || x >= cell.width - band || y >= cell.height - band
+            if (onBorder) ring.add(cell.brightness[y * cell.width + x])
+        }
+    }
+    if (ring.size < 8) return null
+    ring.sort()
+    return ring[ring.size / 2].toDouble()
 }
 
 // ---------------------------------------------------------------------------
@@ -419,8 +522,8 @@ private class CellReading(
     val mask: BooleanArray,
     val occupied: Boolean,
     val occupancyConfidence: Double,
-    val isWhite: Boolean,
-    val colorConfidence: Double,
+    /** Средняя яркость пикселей фигуры. Белая она или чёрная, решается по всей доске сразу. */
+    val meanForeground: Double,
 )
 
 /**
@@ -454,11 +557,9 @@ private fun readCell(cell: Cell, backgroundRef: Double, contrastScale: Double): 
             0.6 + (fillRatio - EMPTY_UPPER_BOUND) / (OCCUPIED_LOWER_CONFIDENT - EMPTY_UPPER_BOUND) * 0.4
     }.coerceIn(0.0, 1.0)
 
-    val meanForegroundBrightness = if (fgCount > 0) fgSum.toDouble() / fgCount else backgroundRef
-    val isWhite = meanForegroundBrightness > 127.5
-    val colorConfidence = (abs(meanForegroundBrightness - 127.5) / 127.5).coerceIn(0.0, 1.0)
+    val meanForeground = if (fgCount > 0) fgSum.toDouble() / fgCount else backgroundRef
 
-    return CellReading(mask, occupied, occupancyConfidence, isWhite, colorConfidence)
+    return CellReading(mask, occupied, occupancyConfidence, meanForeground)
 }
 
 // ---------------------------------------------------------------------------
