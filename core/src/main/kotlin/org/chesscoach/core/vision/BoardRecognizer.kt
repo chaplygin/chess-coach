@@ -105,37 +105,64 @@ internal class RawCellReadings(val letters: List<Char?>, val confidence: List<Do
  */
 internal fun cellSignatures(image: GrayImage): List<DoubleArray?> {
     val region = findBoardRegion(image) ?: return List(64) { null }
-    val result = arrayOfNulls<DoubleArray>(64)
+    val features = readShapes(image, region)
+    return features.map { cell ->
+        cell?.let {
+            doubleArrayOf(
+                it.heightFrac,
+                it.aspect,
+                it.topFrac,
+                it.midFrac,
+                it.botFrac,
+                it.symmetry,
+                it.fill,
+                it.holesNorm,
+            )
+        }
+    }
+}
+
+/**
+ * Один проход по всей доске: чтение клеток плюс приведение роста фигур к
+ * самой высокой из них.
+ *
+ * Рост относительно клетки бесполезен: в одном наборе фигур пешка занимает
+ * три четверти клетки, в другом — половину, и таблица эталонов, снятая с одного
+ * набора, на другом читает все пешки как слонов — это не догадка, а измеренный
+ * результат: шрифты на Windows и на сборочной машине разные, и на второй точность
+ * типа фигуры упала со 100% до 40%.
+ *
+ * Поэтому рост меряется от самой высокой фигуры на этой же доске. В любой
+ * возможной позиции на доске есть оба короля, то есть мерка всегда на месте и не
+ * зависит ни от набора фигур, ни от того, как близко снята доска.
+ */
+private fun readShapes(image: GrayImage, region: BoardRegion): List<ShapeFeatures?> {
+    val raw = arrayOfNulls<ShapeFeatures>(64)
 
     for (row in 0 until 8) {
         for (col in 0 until 8) {
             val cell = extractCell(image, region, row, col)
             val expectedLight = (row + col) % 2 == region.lightParity
             val backgroundRef = if (expectedLight) region.lightAvg else region.darkAvg
+            // Порог контраста подстраивается под контраст самой доски: у тёмных
+            // деревянных досок разница между клетками меньше, чем у ярких
+            // пластиковых, и фиксированное число било бы мимо в обе стороны.
             val contrastScale = max(18.0, abs(region.lightAvg - region.darkAvg) / 3.0)
             val reading = readCell(cell, backgroundRef, contrastScale)
             if (!reading.occupied) continue
-
-            val features = shapeFeatures(reading.mask, cell.width, cell.height) ?: continue
-            result[row * 8 + col] = doubleArrayOf(
-                features.heightFrac,
-                features.aspect,
-                features.topFrac,
-                features.midFrac,
-                features.botFrac,
-                features.symmetry,
-                features.fill,
-                features.holesNorm,
-            )
+            raw[row * 8 + col] = shapeFeatures(reading.mask, cell.width, cell.height)
         }
     }
 
-    return result.toList()
+    val tallest = raw.filterNotNull().maxOfOrNull { it.heightFrac } ?: return raw.toList()
+    if (tallest <= 0.0) return raw.toList()
+    return raw.map { it?.copy(heightFrac = it.heightFrac / tallest) }
 }
 
 /** null, если квадрат доски вообще не нашёлся (см. [findBoardRegion]). */
 internal fun readAllCells(image: GrayImage): RawCellReadings? {
     val region = findBoardRegion(image) ?: return null
+    val shapes = readShapes(image, region)
 
     val cellLetters = arrayOfNulls<Char>(64)
     val cellConfidence = DoubleArray(64)
@@ -147,9 +174,6 @@ internal fun readAllCells(image: GrayImage): RawCellReadings? {
             val cell = extractCell(image, region, row, col)
             val expectedLight = (row + col) % 2 == region.lightParity
             val backgroundRef = if (expectedLight) region.lightAvg else region.darkAvg
-            // Порог контраста подстраивается под контраст самой доски: у тёмных
-            // деревянных досок разница между клетками меньше, чем у ярких
-            // пластиковых, и фиксированное число било бы мимо в обе стороны.
             val contrastScale = max(18.0, abs(region.lightAvg - region.darkAvg) / 3.0)
             val reading = readCell(cell, backgroundRef, contrastScale)
 
@@ -159,7 +183,7 @@ internal fun readAllCells(image: GrayImage): RawCellReadings? {
             }
 
             cellOccupied[index] = true
-            val features = shapeFeatures(reading.mask, cell.width, cell.height)
+            val features = shapes[index]
             if (features == null) {
                 // occupied=true, но силуэт не вычислился (пустая маска на границе
                 // порога) — честнее отметить клетку непрочитанной, чем гадать.
@@ -672,12 +696,12 @@ private class Prototype(
 // меньше расстояния до своего же. Смотри BoardRecognizerTest за реальными
 // цифрами точности на этой версии.
 private val PROTOTYPES = listOf(
-    Prototype(RecognizedPieceType.KING, 0.828, 0.855, 0.941, 1.000, 0.824, 0.978, 0.583, 0.417),
-    Prototype(RecognizedPieceType.QUEEN, 0.750, 1.063, 0.830, 0.837, 0.732, 0.905, 0.580, 0.667),
-    Prototype(RecognizedPieceType.ROOK, 0.708, 0.882, 0.800, 0.550, 1.000, 0.999, 0.663, 0.583),
-    Prototype(RecognizedPieceType.BISHOP, 0.875, 0.714, 0.667, 0.717, 1.000, 0.977, 0.494, 0.083),
-    Prototype(RecognizedPieceType.KNIGHT, 0.745, 0.839, 0.650, 1.000, 0.800, 0.761, 0.617, 0.333),
-    Prototype(RecognizedPieceType.PAWN, 0.708, 0.706, 0.667, 0.667, 1.000, 0.970, 0.479, 0.500),
+    Prototype(RecognizedPieceType.KING, 0.952, 0.850, 0.941, 1.000, 0.824, 0.982, 0.602, 0.167),
+    Prototype(RecognizedPieceType.QUEEN, 0.857, 1.056, 0.816, 0.842, 0.737, 0.935, 0.571, 0.722),
+    Prototype(RecognizedPieceType.ROOK, 0.810, 0.882, 0.800, 0.550, 1.000, 0.999, 0.668, 0.528),
+    Prototype(RecognizedPieceType.BISHOP, 1.000, 0.714, 0.667, 0.715, 1.000, 0.977, 0.495, 0.091),
+    Prototype(RecognizedPieceType.KNIGHT, 0.853, 0.837, 0.656, 1.000, 0.800, 0.762, 0.619, 0.333),
+    Prototype(RecognizedPieceType.PAWN, 0.810, 0.706, 0.667, 0.667, 1.000, 0.974, 0.484, 0.514),
 )
 
 // Асимметрия — единственный надёжный признак коня среди всех шести фигур,

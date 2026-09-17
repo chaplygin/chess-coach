@@ -5,7 +5,9 @@ import java.awt.Font
 import java.awt.RenderingHints
 import java.awt.image.BufferedImage
 import java.util.Locale
+import org.chesscoach.core.BoardLayout
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -29,19 +31,37 @@ class PrototypeCalibrationTest {
         'b' to "♝", 'n' to "♞", 'p' to "♟",
     )
 
+    /**
+     * Доски для калибровки — со смешанным набором фигур, а не по одной фигуре
+     * на доску: рост теперь меряется от самой высокой фигуры рядом, и на доске
+     * из одних пешек пешка оказалась бы ростом в короля.
+     */
+    private val calibrationPositions = listOf(
+        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR",
+        "r2q1rk1/ppp2ppp/2np1n2/2b1p3/2B1P3/2NP1N2/PPP2PPP/R1BQ1RK1",
+        "r1bqkbnr/pppp1ppp/2n5/1B2p3/4P3/8/PPPP1PPP/RNBQK1NR",
+    )
+
     @Test
     fun `таблица эталонов совпадает с тем, что меряет сам распознаватель`() {
         println("=== Пересчитанные эталоны (вставлять в PROTOTYPES как есть) ===")
 
+        val collected = mutableMapOf<Char, MutableList<DoubleArray>>()
+        for (position in calibrationPositions) {
+            val placement = BoardLayout.parsePlacement(position)
+            val signatures = cellSignatures(renderBoard(position))
+            for (index in 0 until 64) {
+                val piece = placement[index] ?: continue
+                val signature = signatures[index] ?: continue
+                collected.getOrPut(piece.lowercaseChar()) { mutableListOf() }.add(signature)
+            }
+        }
+
         val measured = mutableMapOf<Char, DoubleArray>()
         for (piece in listOf('k', 'q', 'r', 'b', 'n', 'p')) {
-            val signatures = cellSignatures(renderCalibrationBoard(piece)).filterNotNull()
-            // Каждая фигура ставится на 16 клеток — поровну белых и чёрных,
-            // поровну на светлых и тёмных полях, поэтому среднее не перекошено
-            // ни фоном клетки, ни цветом самой фигуры.
-            assertEquals("Ожидали 16 занятых клеток на калибровочной доске '$piece'", 16, signatures.size)
-
-            val average = DoubleArray(FEATURE_COUNT) { i -> signatures.sumOf { it[i] } / signatures.size }
+            val samples = collected[piece].orEmpty()
+            assertTrue("Фигура '$piece' почти не встретилась на калибровочных досках", samples.size >= 4)
+            val average = DoubleArray(FEATURE_COUNT) { i -> samples.sumOf { it[i] } / samples.size }
             measured[piece] = average
             println("    " + prototypeLine(piece, average))
         }
@@ -74,11 +94,10 @@ class PrototypeCalibrationTest {
             else -> "PAWN"
         }
         val numbers = values.joinToString(", ") { String.format(Locale.ROOT, "%.3f", it) }
-        return "Prototype(RecognizedPieceType.$name, $numbers),"
+        return "Prototype(RecognizedPieceType." + name + ", " + numbers + "),"
     }
 
-    /** Доска с одной и той же фигурой на 16 клетках: оба цвета фигуры, обе чётности клетки. */
-    private fun renderCalibrationBoard(piece: Char): GrayImage {
+    private fun renderBoard(placementFen: String): GrayImage {
         val boardPixels = 480
         val cellSize = boardPixels / 8
         val image = BufferedImage(boardPixels, boardPixels, BufferedImage.TYPE_INT_RGB)
@@ -93,17 +112,14 @@ class PrototypeCalibrationTest {
             }
         }
 
+        val placement = BoardLayout.parsePlacement(placementFen)
         g.font = Font("SansSerif", Font.PLAIN, (cellSize * 0.8).toInt())
         val metrics = g.fontMetrics
-        val glyph = solidGlyphs.getValue(piece)
         for (row in 0 until 8) {
             for (col in 0 until 8) {
-                // Фигура ставится на каждую четвёртую клетку: реже — и доска
-                // остаётся узнаваемой по чередованию фона (иначе поиск доски
-                // не найдёт её вовсе), но столбцы 0 и 4 дают обе чётности
-                // клетки, а верхняя и нижняя половины — оба цвета фигуры.
-                if (col % 4 != 0) continue
-                g.color = if (row < 4) Color.WHITE else Color.BLACK
+                val piece = placement[row * 8 + col] ?: continue
+                val glyph = solidGlyphs.getValue(piece.lowercaseChar())
+                g.color = if (piece.isUpperCase()) Color.WHITE else Color.BLACK
                 val textWidth = metrics.stringWidth(glyph)
                 val x = col * cellSize + (cellSize - textWidth) / 2
                 val y = row * cellSize + cellSize / 2 + metrics.ascent / 2 - metrics.descent / 4
