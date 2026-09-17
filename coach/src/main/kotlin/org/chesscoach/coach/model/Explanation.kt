@@ -61,7 +61,19 @@ data class AlternativeLine(
 sealed interface Section {
     data class Threat(val threat: ThreatFact) : Section
 
-    data class WhyThisMove(val moveSan: String, val reasons: List<Reason>) : Section
+    /**
+     * [pointIsInTheLine] — смысл хода не сводится к признакам позиции.
+     *
+     * Так бывает у жертв: детекторы видят после хода только мелочи вроде
+     * открытой линии, а настоящая причина раскрывается через несколько
+     * полуходов. Выдавать мелочь за суть жертвы ладьи хуже, чем честно
+     * отослать к варианту.
+     */
+    data class WhyThisMove(
+        val moveSan: String,
+        val reasons: List<Reason>,
+        val pointIsInTheLine: Boolean = false,
+    ) : Section
 
     data class Prophylaxis(val fact: ProphylaxisFact) : Section
 

@@ -68,4 +68,29 @@ class RendererRobustnessTest {
         sections = sections.toList(),
         featuresBefore = FeatureSet.empty(START_FEN),
     )
+
+    @Test
+    fun `ход без внятных признаков честно отсылает к варианту`() {
+        // Жертва, смысл которой раскрывается через несколько полуходов:
+        // выдать открытую линию за причину отдать ладью — значит соврать
+        // уверенным тоном.
+        val text = TextRenderer.render(
+            explanationWith(
+                Section.WhyThisMove(moveSan = "Rxe3", reasons = emptyList(), pointIsInTheLine = true),
+            ),
+        )
+
+        assertTrue(text, text.contains("раскрывается в варианте"))
+    }
+
+    @Test
+    fun `обычный ход к варианту не отсылает`() {
+        val text = TextRenderer.render(
+            explanationWith(
+                Section.WhyThisMove(moveSan = "h3", reasons = emptyList(), pointIsInTheLine = false),
+            ),
+        )
+
+        assertTrue(text, !text.contains("раскрывается в варианте"))
+    }
 }

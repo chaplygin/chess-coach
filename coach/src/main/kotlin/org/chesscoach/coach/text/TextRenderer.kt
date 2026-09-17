@@ -217,10 +217,22 @@ object TextRenderer {
         forkedSquares: Set<Square>,
     ): String? {
         val lines = section.reasons.mapNotNull { reasonSentence(it, glossary, memory, forkedSquares) }
-        if (lines.isEmpty()) return null
+        if (lines.isEmpty() && !section.pointIsInTheLine) return null
+
         // Нумеруем после фильтрации, а не до: пункт, который весь оказался
         // повтором и исчез, не должен оставлять дыру вида "1) ... 3) ...".
-        return lines.mapIndexed { index, line -> "${index + 1}) $line" }.joinToString(System.lineSeparator())
+        val numbered = lines.mapIndexed { index, line -> (index + 1).toString() + ") " + line }
+
+        // Признаки молчат, а ход всё равно заметно сильнее остальных. Выдавать
+        // в таком случае открытую линию за причину отдать ладью — значит
+        // соврать уверенным тоном, поэтому отсылаем к варианту.
+        val caveat = if (section.pointIsInTheLine) {
+            listOf("Одними признаками позиции этот ход не объясняется — его смысл раскрывается в варианте ниже.")
+        } else {
+            emptyList()
+        }
+
+        return (numbered + caveat).joinToString(System.lineSeparator())
     }
 
     /** Один-два самых весомых факта тира, а не все подряд — пункт должен звучать как фраза тренера, а не как список. */

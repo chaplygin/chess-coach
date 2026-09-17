@@ -14,6 +14,7 @@ import org.chesscoach.coach.model.MateFact
 import org.chesscoach.coach.model.PositionExplanation
 import org.chesscoach.coach.model.Section
 import org.chesscoach.coach.model.TrappedPieceFact
+import org.chesscoach.coach.model.ReasonTier
 import org.chesscoach.core.EngineLine
 import org.chesscoach.core.MoveClassification
 import org.chesscoach.core.MoveNotation
@@ -36,6 +37,11 @@ class PipelineOrchestrator(
     private val threatAnalyzer = ThreatAnalyzer(engineClient, featureSource)
     private val reasonDiffAnalyzer = ReasonDiffAnalyzer(engineClient, featureSource)
     private val trapSelector = TrapSelector(engineClient)
+
+    private companion object {
+        /** Насколько ход должен превосходить второй по силе, чтобы молчание детекторов стало подозрительным. */
+        const val UNEXPLAINED_EDGE_CP = 150
+    }
 
     suspend fun explain(fen: String, playedMoveUci: String? = null): PositionExplanation {
         val sideToMove = NullMoveUtil.sideToMoveOf(fen)
@@ -64,7 +70,9 @@ class PipelineOrchestrator(
         if (bestLine != null && bestMoveUci != null) {
             val moveToExplain = playedMoveUci ?: bestMoveUci
             val diff = reasonDiffAnalyzer.analyse(fen, moveToExplain, bestLine.score)
-            diff.whyThisMove?.let { sections += it }
+            diff.whyThisMove
+                ?.let { it.copy(pointIsInTheLine = pointIsInTheLine(it, bestLine, mainLines)) }
+                ?.let { sections += it }
 
             // Профилактика — третий тир причин, и обычно она уже стоит пунктом
             // в списке "почему этот ход". Отдельный раздел тогда повторяет то
@@ -122,6 +130,32 @@ class PipelineOrchestrator(
      * пригождается запасной вариант, добытый в [ReasonDiffAnalyzer] через
      * подтверждающий поиск после этого самого хода.
      */
+    /**
+     * Ход заметно сильнее остальных, а объяснить его нечем, кроме мелочей.
+     *
+     * Так выглядят жертвы: детекторы видят после хода разве что открытую
+     * линию, потому что смысл раскрывается через несколько полуходов. Выдать
+     * открытую линию за причину отдать ладью — значит соврать читателю
+     * уверенным тоном, поэтому в таком случае честнее отослать к варианту.
+     */
+    private fun pointIsInTheLine(
+        why: Section.WhyThisMove,
+        bestLine: EngineLine?,
+        mainLines: List<EngineLine>,
+    ): Boolean {
+        if (bestLine == null || mainLines.size < 2) return false
+
+        val weighty = setOf(
+            ReasonTier.MATERIAL_TACTICS,
+            ReasonTier.KING_SAFETY,
+            ReasonTier.PROPHYLAXIS,
+        )
+        if (why.reasons.any { it.tier in weighty }) return false
+
+        val second = mainLines.first { it !== bestLine }
+        return ScoreFormat.centipawnLoss(bestLine.score, second.score) >= UNEXPLAINED_EDGE_CP
+    }
+
     /**
      * Порядок чтения разбора.
      *
