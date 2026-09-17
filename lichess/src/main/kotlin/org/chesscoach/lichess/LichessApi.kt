@@ -103,7 +103,16 @@ class LichessApi internal constructor(
         }
 
     companion object {
-        const val USER_AGENT = "ChessCoach/0.1 (Android; личный разбор партий)"
+        /**
+         * Только латиница и цифры.
+         *
+         * Значения заголовков HTTP передаются однобайтовой кодировкой, и
+         * кириллица в них не проходит: OkHttp отвергает такой заголовок ещё до
+         * отправки запроса. Русское пояснение тут стоило входа в аккаунт —
+         * браузер до Lichess доходил, а обмен кода на токен падал уже внутри
+         * приложения.
+         */
+        const val USER_AGENT = "ChessCoach/0.1 (Android; personal game review)"
         private const val DEFAULT_RETRY_AFTER_SECONDS = 60L
 
         internal fun defaultHttpClient(): OkHttpClient = OkHttpClient.Builder()
