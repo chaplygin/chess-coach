@@ -5,7 +5,9 @@ import com.github.bhlangonijr.chesslib.Side
 import com.github.bhlangonijr.chesslib.Square
 import com.github.bhlangonijr.chesslib.move.Move
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SeeCalculatorTest {
@@ -68,5 +70,39 @@ class SeeCalculatorTest {
         val capture = Move(Square.E1, Square.E3)
 
         assertEquals(SeeCalculator.PAWN_VALUE, SeeCalculator.evaluateMove(board, capture))
+    }
+
+    // ——— Кто бьёт первым и есть ли защита ———
+
+    @Test
+    fun `first capture names the cheapest attacker that can legally take`() {
+        // Чёрный конь на d5 под боем пешки e4 и ферзя d1. Начинать размен
+        // выгодно пешкой, и именно её должен назвать тренер.
+        val board = board("4k3/8/8/3n4/4P3/8/8/3QK3 w - - 0 1")
+
+        val first = SeeCalculator.firstCapture(board, Square.D5, Side.WHITE)
+
+        checkNotNull(first)
+        assertEquals(Square.E4, first.from)
+        assertFalse(first.recaptureExists)
+    }
+
+    @Test
+    fun `a defended piece is reported as defended`() {
+        // Тот же конь, но теперь его держит пешка c6: взять обратно есть чем.
+        val board = board("4k3/8/2p5/3n4/4P3/8/8/4K3 w - - 0 1")
+
+        val first = SeeCalculator.firstCapture(board, Square.D5, Side.WHITE)
+
+        checkNotNull(first)
+        assertEquals(Square.E4, first.from)
+        assertTrue(first.recaptureExists)
+    }
+
+    @Test
+    fun `nothing to capture with means no first capture at all`() {
+        val board = board("4k3/8/8/3n4/8/8/8/4K3 w - - 0 1")
+
+        assertNull(SeeCalculator.firstCapture(board, Square.D5, Side.WHITE))
     }
 }
