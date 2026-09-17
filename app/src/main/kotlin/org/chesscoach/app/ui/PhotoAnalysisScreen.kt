@@ -53,7 +53,7 @@ import org.chesscoach.engine.SearchLimits
 /** Сторона снимка, длиннее которой мы не пускаем в распознавание. */
 private const val MAX_PHOTO_SIDE = 1024
 
-private data class PositionAdvice(val scoreFromWhite: Score, val bestMoveSan: String, val depth: Int)
+private data class PhotoPositionAdvice(val scoreFromWhite: Score, val bestMoveSan: String, val depth: Int)
 
 /**
  * Экран «сфотографируй позицию — получи тот же разбор, что и в партии».
@@ -134,7 +134,7 @@ fun PhotoAnalysisScreen(container: AppContainer, onBack: () -> Unit) {
 
     val recognizedFen = (recognition as? RecognitionResult.Recognized)?.fen
 
-    var advice by remember { mutableStateOf<PositionAdvice?>(null) }
+    var advice by remember { mutableStateOf<PhotoPositionAdvice?>(null) }
     var explanation by remember { mutableStateOf<PositionExplanation?>(null) }
     var analyzing by remember { mutableStateOf(false) }
     var engineError by remember { mutableStateOf<String?>(null) }
@@ -152,7 +152,7 @@ fun PhotoAnalysisScreen(container: AppContainer, onBack: () -> Unit) {
                 val line = result.lines.firstOrNull()
                 val uci = line?.pv?.firstOrNull()
                 if (line != null && uci != null) {
-                    advice = PositionAdvice(
+                    advice = PhotoPositionAdvice(
                         scoreFromWhite = ScoreFormat.toWhitePerspective(line.score, MoveNotation.sideToMove(fen)),
                         bestMoveSan = MoveNotation.uciToSanOrRaw(fen, listOf(uci)).first(),
                         depth = line.depth,
@@ -336,7 +336,7 @@ private fun NotSureCard(result: RecognitionResult.NotSure) {
 @Composable
 private fun PositionAnalysisCard(
     fen: String,
-    advice: PositionAdvice?,
+    advice: PhotoPositionAdvice?,
     coachText: String?,
     analyzing: Boolean,
     error: String?,
