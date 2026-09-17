@@ -54,7 +54,7 @@ class ForkDetector : Detector {
                     piece = piece,
                     targets = targets,
                     favours = side,
-                    evidence = Evidence.of(square, *targets.toTypedArray()),
+                    evidence = Evidence.onBoard(board, square, *targets.toTypedArray()),
                 )
             }
         }

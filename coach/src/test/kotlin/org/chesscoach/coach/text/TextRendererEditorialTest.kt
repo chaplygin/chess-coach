@@ -1,0 +1,336 @@
+package org.chesscoach.coach.text
+
+import com.github.bhlangonijr.chesslib.Piece
+import com.github.bhlangonijr.chesslib.Side
+import com.github.bhlangonijr.chesslib.Square
+import org.chesscoach.coach.model.CenterControlFact
+import org.chesscoach.coach.model.Evidence
+import org.chesscoach.coach.model.FeatureSet
+import org.chesscoach.coach.model.ForkFact
+import org.chesscoach.coach.model.HangingPieceFact
+import org.chesscoach.coach.model.KingSafetyFact
+import org.chesscoach.coach.model.MaterialVerdict
+import org.chesscoach.coach.model.MobilityEdgeFact
+import org.chesscoach.coach.model.PawnWeaknessFact
+import org.chesscoach.coach.model.PawnWeaknessKind
+import org.chesscoach.coach.model.PositionExplanation
+import org.chesscoach.coach.model.Reason
+import org.chesscoach.coach.model.ReasonTier
+import org.chesscoach.coach.model.Section
+import org.chesscoach.coach.model.ThreatFact
+import org.chesscoach.core.EngineLine
+import org.chesscoach.core.Score
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * Прогон на настоящем движке показал: структурно честный текст ещё не значит
+ * читаемый. Эти тесты закрывают то, что разбор на живых партиях обнажил —
+ * согласование стороны по числам и падежам, дедупликацию повторов и
+ * редакторскую сдержанность (не больше 1-2 фактов на пункт, сноски не ломают
+ * предложение).
+ */
+class TextRendererEditorialTest {
+
+    private val fen = "r1bq1rk1/ppp1bppp/2n1pn2/3p4/3P4/2N1PN2/PPP1BPPP/R1BQ1RK1 b - - 2 14"
+
+    private fun explanation(sections: List<Section>) = PositionExplanation(
+        fen = fen,
+        sideToMove = Side.BLACK,
+        scoreFromWhite = Score.Cp(35),
+        bestMoveSan = "Rfe8",
+        bestMoveUci = "f8e8",
+        sections = sections,
+        featuresBefore = FeatureSet.empty(fen),
+    )
+
+    private fun reasonSection(vararg facts: org.chesscoach.coach.model.Fact) =
+        Section.WhyThisMove("Rfe8", listOf(Reason(ReasonTier.MATERIAL_TACTICS, facts.toList())))
+
+    // ——— Согласование стороны (пункт 1 правки) ———
+
+    @Test
+    fun `side lexicon declines by case, nominative and genitive differ`() {
+        assertEquals("белые", SideLexicon.name(Side.WHITE))
+        assertEquals("белых", SideLexicon.name(Side.WHITE, GrammaticalCase.GENITIVE))
+        assertEquals("чёрные", SideLexicon.name(Side.BLACK))
+        assertEquals("чёрных", SideLexicon.name(Side.BLACK, GrammaticalCase.GENITIVE))
+    }
+
+    @Test
+    fun `center control fact uses the plural verb, not the singular one`() {
+        val fact = CenterControlFact(
+            owner = Side.BLACK,
+            ownControl = 5,
+            opponentControl = 1,
+            favours = Side.BLACK,
+            evidence = Evidence.of(Square.D4),
+        )
+
+        val text = TextRenderer.render(explanation(listOf(reasonSection(fact))))
+
+        assertTrue(text, text.contains("Чёрные прочно держат центр."))
+        assertFalse(text, text.contains("держит центр"))
+    }
+
+    @Test
+    fun `a trap that only worsens the position uses the genitive after u, not the nominative`() {
+        val trap = Section.Trap(
+            moveSan = "Nd4",
+            lossCentipawns = 40,
+            refutationSan = listOf("Bxd4", "cxd4"),
+            verdict = MaterialVerdict.POSITIONAL,
+        )
+
+        val text = TextRenderer.render(explanation(listOf(trap)))
+
+        assertTrue(text, text.contains("позиция у чёрных заметно хуже"))
+        assertFalse(text, text.contains("у чёрные"))
+    }
+
+    // ——— Дедупликация (пункт 2 правки) ———
+
+    @Test
+    fun `the same fact text is not repeated within one reason even if the underlying facts are not equal`() {
+        val queenHangingAtMove = HangingPieceFact(
+            square = Square.E2,
+            piece = Piece.WHITE_QUEEN,
+            lossCentipawns = 900,
+            favours = Side.BLACK,
+            evidence = Evidence.of(Square.E2),
+        )
+        // Тот же самый факт по смыслу (тот же ферзь на том же поле), но другой
+        // объект: другая просадка и другое доказательство — ровно так, как
+        // ReasonDiffAnalyzer мог найти его дважды (после хода и после ответа).
+        val queenHangingAtReply = queenHangingAtMove.copy(lossCentipawns = 850, evidence = Evidence.of(Square.E2, Square.D1))
+
+        val text = TextRenderer.render(explanation(listOf(reasonSection(queenHangingAtMove, queenHangingAtReply))))
+
+        val occurrences = Regex("Ферзь на e2 потерян").findAll(text).count()
+        assertEquals(1, occurrences)
+    }
+
+    @Test
+    fun `a fork's own targets are not separately reported as hanging — the fork already names them`() {
+        val fork = ForkFact(
+            from = Square.C3,
+            piece = Piece.BLACK_KNIGHT,
+            targets = listOf(Square.D1, Square.E2),
+            favours = Side.BLACK,
+            evidence = Evidence(
+                squares = listOf(Square.C3, Square.D1, Square.E2),
+                pieces = mapOf(Square.D1 to Piece.WHITE_ROOK, Square.E2 to Piece.WHITE_QUEEN),
+            ),
+        )
+        val rookHanging = HangingPieceFact(Square.D1, Piece.WHITE_ROOK, 500, Side.BLACK, Evidence.of(Square.D1))
+        val queenHanging = HangingPieceFact(Square.E2, Piece.WHITE_QUEEN, 900, Side.BLACK, Evidence.of(Square.E2))
+
+        val text = TextRenderer.render(explanation(listOf(reasonSection(rookHanging, queenHanging, fork))))
+
+        assertTrue(text, text.contains("вилкой нападает сразу на ладью d1 и ферзя e2"))
+        assertFalse(text, text.contains("потеряна"))
+        assertFalse(text, text.contains("Ферзь на e2 потерян"))
+    }
+
+    @Test
+    fun `a king safety fact already said in a reason is not repeated in its own standalone section`() {
+        val kingSafety = KingSafetyFact(
+            king = Square.G8,
+            kingSide = Side.BLACK,
+            attackerCount = 2,
+            shieldPawnsMissing = 1,
+            openFilesNearKing = emptyList(),
+            favours = Side.WHITE,
+            evidence = Evidence.of(Square.G8),
+        )
+
+        val sections = listOf(
+            Section.WhyThisMove("Rfe8", listOf(Reason(ReasonTier.KING_SAFETY, listOf(kingSafety)))),
+            Section.KingSafetyNote(kingSafety),
+        )
+
+        val text = TextRenderer.render(explanation(sections))
+
+        assertFalse(text, text.contains("БЕЗОПАСНОСТЬ КОРОЛЯ"))
+        assertEquals(1, Regex("под давлением").findAll(text).count())
+    }
+
+    // ——— Редакторская сдержанность (пункт 3 правки) ———
+
+    @Test
+    fun `a reason keeps at most two facts even when the tier has more`() {
+        val facts = (0..4).map { index ->
+            HangingPieceFact(
+                square = Square.values()[index],
+                piece = Piece.WHITE_PAWN,
+                lossCentipawns = 100,
+                favours = Side.BLACK,
+                evidence = Evidence.of(Square.values()[index]),
+            )
+        }
+
+        val text = TextRenderer.render(explanation(listOf(reasonSection(*facts.toTypedArray()))))
+
+        val whyThisMove = text.substringAfter("ЛУЧШИЙ ХОД")
+        assertEquals(2, Regex("потеряна").findAll(whyThisMove).count())
+    }
+
+    @Test
+    fun `a threat keeps the opponent's move and at most two of its dangerous consequences, nothing structural`() {
+        val hanging1 = HangingPieceFact(Square.D8, Piece.BLACK_QUEEN, 900, Side.WHITE, Evidence.of(Square.D8))
+        val hanging2 = HangingPieceFact(Square.E6, Piece.BLACK_BISHOP, 300, Side.WHITE, Evidence.of(Square.E6))
+        val hanging3 = HangingPieceFact(Square.A8, Piece.BLACK_ROOK, 500, Side.WHITE, Evidence.of(Square.A8))
+        val notDanger = PawnWeaknessFact(PawnWeaknessKind.BACKWARD, Square.E6, Side.BLACK, Side.WHITE, Evidence.of(Square.E6))
+        val alsoNotDanger = MobilityEdgeFact(Side.WHITE, 20, 10, Side.WHITE, Evidence.of(Square.E4))
+
+        val threat = ThreatFact(
+            opponentMoveUci = "f3g5",
+            opponentMoveSan = "Ng5",
+            dropCentipawns = 200,
+            consequences = listOf(hanging1, hanging2, hanging3, notDanger, alsoNotDanger),
+            favours = Side.WHITE,
+            evidence = Evidence.fromEngine(EngineLine(1, Score.Cp(200), listOf("f3g5"), 12)),
+        )
+
+        val text = TextRenderer.render(explanation(listOf(Section.Threat(threat))))
+        val threatBlock = text.substringAfter("УГРОЗА")
+
+        assertFalse(threatBlock, threatBlock.contains("отсталая"))
+        assertFalse(threatBlock, threatBlock.contains("пространства для манёвра"))
+        // "потерян" — общая часть и мужской, и женской формы ("потерян"/"потеряна"),
+        // так что подсчёт не зависит от того, какие два факта из трёх выживут при обрезке.
+        assertEquals(2, Regex("потерян").findAll(threatBlock).count())
+    }
+
+    // ——— Сноска не ломает предложение (пункт 4 правки) ———
+
+    @Test
+    fun `the glossary footnote lands in its own block at the end, not inside the sentence`() {
+        val overload = org.chesscoach.coach.model.OverloadedDefenderFact(
+            defender = Square.D2,
+            duties = listOf(Square.D5, Square.F3),
+            favours = Side.BLACK,
+            evidence = Evidence.of(Square.D2, Square.D5, Square.F3),
+        )
+
+        val text = TextRenderer.render(explanation(listOf(reasonSection(overload))))
+
+        // Внутри пункта причины термин голый, без скобок с определением.
+        val whyThisMove = text.substringBefore("ТЕРМИНЫ")
+        assertFalse(whyThisMove, whyThisMove.contains(GlossaryTerm.OVERLOADED_PIECE.definition))
+        // Определение — только в отдельном блоке в конце.
+        assertTrue(text, text.contains("ТЕРМИНЫ"))
+        assertTrue(text, text.substringAfter("ТЕРМИНЫ").contains(GlossaryTerm.OVERLOADED_PIECE.definition))
+    }
+
+    // ——— Перечисление через запятые, не через повторное "и" (пункт 6) ———
+
+    @Test
+    fun `three or more targets are listed with commas and a single final and, not and repeated`() {
+        val fork = ForkFact(
+            from = Square.E1,
+            piece = Piece.BLACK_QUEEN,
+            targets = listOf(Square.D1, Square.F2, Square.C3),
+            favours = Side.BLACK,
+            evidence = Evidence(
+                squares = listOf(Square.E1, Square.D1, Square.F2, Square.C3),
+                pieces = mapOf(Square.D1 to Piece.WHITE_QUEEN, Square.F2 to Piece.WHITE_PAWN, Square.C3 to Piece.WHITE_PAWN),
+            ),
+        )
+
+        val text = TextRenderer.render(explanation(listOf(reasonSection(fork))))
+
+        assertTrue(text, text.contains("нападает сразу на ферзя d1, пешку f2 и пешку c3."))
+        assertFalse(text, text.contains("f2 и пешку c3 и"))
+        assertFalse(text, text.contains("d1 и пешку f2 и"))
+    }
+
+    // ——— Величина материального перевеса соразмерна словам (пункт 7 правки) ———
+
+    @Test
+    fun `a pawn-sized imbalance is called an extra pawn, not a vague material edge`() {
+        val text = TextRenderer.render(explanation(listOf(Section.MaterialNote(centipawnsFromWhite = -110, facts = emptyList()))))
+
+        assertTrue(text, text.contains("У чёрных лишняя пешка."))
+    }
+
+    @Test
+    fun `an exchange-sized imbalance is called an extra exchange`() {
+        val text = TextRenderer.render(explanation(listOf(Section.MaterialNote(centipawnsFromWhite = 200, facts = emptyList()))))
+
+        assertTrue(text, text.contains("У белых лишнее качество."))
+    }
+
+    @Test
+    fun `a piece-or-more imbalance keeps the general noticeable material edge wording`() {
+        val text = TextRenderer.render(explanation(listOf(Section.MaterialNote(centipawnsFromWhite = -600, facts = emptyList()))))
+
+        assertTrue(text, text.contains("Заметный материальный перевес у чёрных."))
+    }
+
+    @Test
+    fun `hanging pieces are not repeated inside the MATERIAL section — that is said elsewhere`() {
+        val hanging = HangingPieceFact(Square.D3, Piece.WHITE_BISHOP, 330, Side.BLACK, Evidence.of(Square.D3))
+        val section = Section.MaterialNote(centipawnsFromWhite = -110, facts = listOf(hanging))
+
+        val text = TextRenderer.render(explanation(listOf(section)))
+        val materialBlock = text.substringAfter("МАТЕРИАЛ")
+
+        assertTrue(materialBlock, materialBlock.contains("У чёрных лишняя пешка."))
+        assertFalse(materialBlock, materialBlock.contains("потерян"))
+        assertFalse(materialBlock, materialBlock.contains("Слон"))
+    }
+
+    // ——— Свой и чужой король не путаются (пункт 9 правки) ———
+
+    @Test
+    fun `king safety always names whose king it is`() {
+        val whiteKing = KingSafetyFact(
+            king = Square.E1,
+            kingSide = Side.WHITE,
+            attackerCount = 1,
+            shieldPawnsMissing = 1,
+            openFilesNearKing = emptyList(),
+            favours = Side.BLACK,
+            evidence = Evidence.of(Square.E1),
+        )
+        val blackKing = whiteKing.copy(king = Square.G8, kingSide = Side.BLACK, favours = Side.WHITE, evidence = Evidence.of(Square.G8))
+
+        val whiteText = TextRenderer.render(explanation(listOf(reasonSection(whiteKing))))
+        val blackText = TextRenderer.render(explanation(listOf(reasonSection(blackKing))))
+
+        assertTrue(whiteText, whiteText.contains("Король белых на e1 под давлением"))
+        assertTrue(blackText, blackText.contains("Король чёрных на g8 под давлением"))
+    }
+
+    @Test
+    fun `a reason never names two different kings — only the first one survives`() {
+        val opponentKing = KingSafetyFact(
+            king = Square.H7,
+            kingSide = Side.WHITE,
+            attackerCount = 1,
+            shieldPawnsMissing = 1,
+            openFilesNearKing = emptyList(),
+            favours = Side.BLACK,
+            evidence = Evidence.of(Square.H7),
+        )
+        val ownKing = KingSafetyFact(
+            king = Square.G8,
+            kingSide = Side.BLACK,
+            attackerCount = 1,
+            shieldPawnsMissing = 1,
+            openFilesNearKing = emptyList(),
+            favours = Side.WHITE,
+            evidence = Evidence.of(Square.G8),
+        )
+
+        val text = TextRenderer.render(explanation(listOf(reasonSection(opponentKing, ownKing))))
+        val whyThisMove = text.substringAfter("ЛУЧШИЙ ХОД")
+
+        assertEquals(1, Regex("Король").findAll(whyThisMove).count())
+        assertTrue(whyThisMove, whyThisMove.contains("Король белых на h7"))
+        assertFalse(whyThisMove, whyThisMove.contains("Король чёрных на g8"))
+    }
+}

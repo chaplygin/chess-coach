@@ -55,7 +55,7 @@ class BackRankDetector : Detector {
                 blockedBy = blockedBy,
                 exploiter = exploiter,
                 favours = enemy,
-                evidence = Evidence.of(kingSquare, exploiter, *blockedBy.toTypedArray()),
+                evidence = Evidence.onBoard(board, kingSquare, exploiter, *blockedBy.toTypedArray()),
             )
         }
 

@@ -53,7 +53,7 @@ class DiscoveredAttackDetector : Detector {
                     revealed = square,
                     target = target,
                     favours = side,
-                    evidence = Evidence.of(square, moving, target),
+                    evidence = Evidence.onBoard(board, square, moving, target),
                 )
             }
         }

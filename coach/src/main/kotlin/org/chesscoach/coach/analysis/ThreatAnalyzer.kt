@@ -6,6 +6,7 @@ import org.chesscoach.coach.engine.EngineClient
 import org.chesscoach.coach.engine.NullMoveUtil
 import org.chesscoach.coach.model.CoachThresholds
 import org.chesscoach.coach.model.Evidence
+import org.chesscoach.coach.model.Fact
 import org.chesscoach.coach.model.FeatureSource
 import org.chesscoach.coach.model.ThreatFact
 import org.chesscoach.core.EngineLine
@@ -97,7 +98,14 @@ class ThreatAnalyzer(
         // а не из этого класса.
         val afterThreatFen = applyUciMove(threat.flippedFen, threat.opponentMoveUci) ?: threat.flippedFen
         val opponentSide = ourSide.flip()
-        val consequences = featureSource.features(afterThreatFen).facts.filter { it.favours == opponentSide }
+
+        // Следствие угрозы — то, что появилось ИМЕННО от этого хода, а не всё
+        // хорошее, что у соперника и так было. Иначе получается неправда:
+        // "соперник сыграет Сd7, и конь окажется связан" — хотя связывает его
+        // слон, стоящий на доске с самого начала, и ход тут ни при чём.
+        val before = featureSource.features(fen).facts.map(::signature).toSet()
+        val consequences = featureSource.features(afterThreatFen).facts
+            .filter { it.favours == opponentSide && signature(it) !in before }
 
         return ThreatFact(
             opponentMoveUci = threat.opponentMoveUci,
@@ -109,3 +117,13 @@ class ThreatAnalyzer(
         )
     }
 }
+
+/**
+ * Опознание факта без учёта доказательства.
+ *
+ * Сравнивать факты целиком нельзя: у одного и того же признака в двух
+ * позициях отличаются приложенные строки движка и записанные фигуры, и любой
+ * признак выглядел бы новым.
+ */
+private fun signature(fact: Fact): String =
+    fact.javaClass.simpleName + ":" + fact.evidence.squares.joinToString(",")

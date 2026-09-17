@@ -39,7 +39,7 @@ class OverloadDetector : Detector {
                     defender = square,
                     duties = duties,
                     favours = opponent,
-                    evidence = Evidence.of(square, *duties.toTypedArray()),
+                    evidence = Evidence.onBoard(board, square, *duties.toTypedArray()),
                 )
             }
         }

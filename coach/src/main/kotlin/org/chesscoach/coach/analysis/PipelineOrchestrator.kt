@@ -65,7 +65,18 @@ class PipelineOrchestrator(
             val moveToExplain = playedMoveUci ?: bestMoveUci
             val diff = reasonDiffAnalyzer.analyse(fen, moveToExplain, bestLine.score)
             diff.whyThisMove?.let { sections += it }
-            diff.prophylaxis?.let { sections += Section.Prophylaxis(it) }
+
+            // Профилактика — третий тир причин, и обычно она уже стоит пунктом
+            // в списке "почему этот ход". Отдельный раздел тогда повторяет то
+            // же самое другими словами, и разбор выглядит так, будто тренер
+            // забыл, что уже это сказал.
+            val alreadyAmongReasons = diff.whyThisMove
+                ?.reasons
+                ?.any { reason -> reason.facts.any { it === diff.prophylaxis } }
+                ?: false
+            if (!alreadyAmongReasons) {
+                diff.prophylaxis?.let { sections += Section.Prophylaxis(it) }
+            }
 
             if (playedMoveUci != null) {
                 classification = classify(bestLine.score, playedMoveUci, bestMoveUci, mainLines, diff.moveScoreFromMover)
@@ -97,7 +108,7 @@ class PipelineOrchestrator(
             scoreFromWhite = scoreFromWhite,
             bestMoveSan = bestMoveSan,
             bestMoveUci = bestMoveUci ?: "",
-            sections = sections,
+            sections = sections.sortedBy(::readingOrder),
             featuresBefore = featuresBefore,
             playedMoveSan = playedMoveUci?.let { MoveNotation.uciToSanOrRaw(fen, listOf(it)).first() },
             classification = classification,
@@ -111,6 +122,26 @@ class PipelineOrchestrator(
      * пригождается запасной вариант, добытый в [ReasonDiffAnalyzer] через
      * подтверждающий поиск после этого самого хода.
      */
+    /**
+     * Порядок чтения разбора.
+     *
+     * Задаётся отдельно от порядка сборки: движок опрашивается в том порядке,
+     * в каком дешевле считать, а читать надо в том, в каком тренер объясняет.
+     * Иначе замечание про материал оказывается в конце, после длинного
+     * варианта, где его уже никто не увидит.
+     */
+    private fun readingOrder(section: Section): Int = when (section) {
+        is Section.MaterialNote -> 0
+        is Section.Threat -> 1
+        is Section.WhyThisMove -> 2
+        is Section.Prophylaxis -> 3
+        is Section.Plan -> 4
+        is Section.Trap -> 5
+        is Section.Alternatives -> 6
+        is Section.ExpectedContinuation -> 7
+        is Section.KingSafetyNote -> 8
+    }
+
     private fun classify(
         bestScore: Score,
         playedMoveUci: String,

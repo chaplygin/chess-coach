@@ -12,6 +12,8 @@ dependencies {
     api(project(":core"))
     api(libs.kotlinx.coroutines.core)
     testImplementation(libs.junit)
+    // Только для чтения файла с задачами Lichess в локальной упряжи разбора.
+    testImplementation(libs.kotlinx.serialization.json)
     testImplementation(libs.kotlinx.coroutines.test)
 }
 

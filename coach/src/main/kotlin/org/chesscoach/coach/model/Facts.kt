@@ -1,5 +1,6 @@
 package org.chesscoach.coach.model
 
+import com.github.bhlangonijr.chesslib.Board
 import com.github.bhlangonijr.chesslib.Piece
 import com.github.bhlangonijr.chesslib.Side
 import com.github.bhlangonijr.chesslib.Square
@@ -15,12 +16,25 @@ data class Evidence(
     val squares: List<Square> = emptyList(),
     val engineLine: EngineLine? = null,
     val seeCentipawns: Int? = null,
+    /**
+     * Кто стоял на этих полях в тот момент, когда факт был найден.
+     *
+     * Без этого тренер вынужден говорить «под боем сразу d8 и e6» вместо
+     * «нападает на ферзя d8 и слона e6» — а именно называние фигур и отличает
+     * человеческое объяснение от машинного. Подсмотреть их позже по позиции
+     * нельзя: факты об угрозе относятся к доске после чужого хода, и фигура
+     * на том же поле там уже может быть другой.
+     */
+    val pieces: Map<Square, Piece> = emptyMap(),
 ) {
     init {
         require(squares.isNotEmpty() || engineLine != null) {
             "Факт без доказательства создавать нельзя"
         }
     }
+
+    /** Фигура на поле, если она была записана при обнаружении факта. */
+    fun pieceAt(square: Square): Piece? = pieces[square]?.takeIf { it != Piece.NONE }
 
     companion object {
         fun of(vararg squares: Square): Evidence = Evidence(squares.toList())
@@ -30,6 +44,19 @@ data class Evidence(
 
         fun fromEngine(line: EngineLine, vararg squares: Square): Evidence =
             Evidence(squares.toList(), engineLine = line)
+
+        /**
+         * То же, но с запоминанием фигур, стоящих на этих полях прямо сейчас.
+         * Предпочтительный способ для тактических фактов: именно их поля потом
+         * называются в тексте.
+         */
+        fun onBoard(board: Board, vararg squares: Square): Evidence {
+            val list = squares.toList()
+            return Evidence(
+                squares = list,
+                pieces = list.associateWith { board.getPiece(it) }.filterValues { it != Piece.NONE },
+            )
+        }
     }
 }
 

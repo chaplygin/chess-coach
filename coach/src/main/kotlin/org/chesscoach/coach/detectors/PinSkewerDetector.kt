@@ -46,7 +46,7 @@ class PinSkewerDetector : Detector {
                 if (behindPiece.pieceSide != opponent) continue
 
                 val frontValue = SeeCalculator.value(frontPiece.pieceType)
-                val evidence = Evidence.of(square, front, behind)
+                val evidence = Evidence.onBoard(board, square, front, behind)
 
                 when {
                     behindPiece.pieceType == PieceType.KING -> facts += PinFact(

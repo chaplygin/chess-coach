@@ -13,7 +13,9 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -33,6 +35,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import org.chesscoach.app.AppContainer
 import org.chesscoach.core.GameReplay
 import org.chesscoach.core.GameSummary
@@ -52,6 +55,14 @@ private data class PositionAdvice(
     val depth: Int,
 )
 
+/**
+ * Пауза перед обращением к движку.
+ *
+ * Пока пользователь щёлкает по ходам, считать каждую промежуточную позицию
+ * бессмысленно: разбор всё равно не успеет показаться, а движок будет занят.
+ */
+private const val SETTLE_MS = 350L
+
 @Composable
 fun GameReviewScreen(
     container: AppContainer,
@@ -65,25 +76,33 @@ fun GameReviewScreen(
     // -1 — начальная позиция, до первого хода.
     var currentPly by remember(game.id) { mutableStateOf(-1) }
     var advice by remember(game.id) { mutableStateOf<PositionAdvice?>(null) }
-    var analysing by remember(game.id) { mutableStateOf(false) }
+    var coachText by remember(game.id) { mutableStateOf<String?>(null) }
+    var thinking by remember(game.id) { mutableStateOf(false) }
     var engineError by remember(game.id) { mutableStateOf<String?>(null) }
 
     val fen = currentFen(positions, currentPly)
     val movesState = rememberLazyListState()
 
-    LaunchedEffect(currentPly, positions) {
+    // Ключ включает и номер полухода: одна и та же позиция может встретиться
+    // дважды при повторении ходов, а сыгранный из неё ход будет разным.
+    LaunchedEffect(fen, currentPly) {
         advice = null
+        coachText = null
         engineError = null
         if (positions.isEmpty()) return@LaunchedEffect
 
-        analysing = true
+        delay(SETTLE_MS)
+        thinking = true
+
+        // Сначала короткий поиск: оценка и стрелка появляются сразу, а не
+        // через две с половиной секунды полного разбора.
         container.engine.analyzer()
-            .mapCatching { it.analyze(fen, SearchLimits(movetimeMs = 1200, multiPv = 1)) }
+            .mapCatching { it.analyze(fen, SearchLimits(movetimeMs = 600, multiPv = 1)) }
             .onSuccess { result ->
                 val line = result.lines.firstOrNull()
                 val uci = line?.pv?.firstOrNull()
-                advice = if (line != null && uci != null) {
-                    PositionAdvice(
+                if (line != null && uci != null) {
+                    advice = PositionAdvice(
                         scoreFromWhite = ScoreFormat.toWhitePerspective(
                             line.score,
                             MoveNotation.sideToMove(fen),
@@ -93,13 +112,19 @@ fun GameReviewScreen(
                         bestMoveTo = uci.drop(2).take(2),
                         depth = line.depth,
                     )
-                } else {
-                    null
                 }
             }
             .onFailure { engineError = it.message ?: "Движок недоступен" }
 
-        analysing = false
+        if (engineError == null) {
+            // Ход, который был сыгран в партии из этой позиции: тренеру он
+            // нужен, чтобы сказать, чем он хуже лучшего.
+            val playedUci = positions.getOrNull(currentPly + 1)?.uci
+            coachText = runCatching { container.coach.explainAsText(fen, playedUci) }
+                .getOrNull()
+        }
+
+        thinking = false
     }
 
     LaunchedEffect(currentPly) {
@@ -107,7 +132,7 @@ fun GameReviewScreen(
     }
 
     Column(
-        modifier = Modifier.fillMaxSize().padding(12.dp),
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Row(
@@ -117,7 +142,7 @@ fun GameReviewScreen(
         ) {
             TextButton(onClick = onBack) { Text("К списку") }
             Text(
-                "против ${game.opponent.name}",
+                "против " + game.opponent.name,
                 style = MaterialTheme.typography.bodySmall,
             )
         }
@@ -156,7 +181,13 @@ fun GameReviewScreen(
             ) { Text("Вперёд") }
         }
 
-        AdviceCard(fen = fen, advice = advice, analysing = analysing, error = engineError)
+        AdviceCard(
+            fen = fen,
+            advice = advice,
+            coachText = coachText,
+            thinking = thinking,
+            error = engineError,
+        )
     }
 }
 
@@ -190,7 +221,7 @@ private fun MoveStrip(
             ) {
                 Text(
                     buildString {
-                        if (ply.whiteMoved) append("${ply.moveNumber}. ")
+                        if (ply.whiteMoved) append(ply.moveNumber.toString() + ". ")
                         append(ply.san)
                     },
                     fontFamily = FontFamily.Monospace,
@@ -206,7 +237,8 @@ private fun MoveStrip(
 private fun AdviceCard(
     fen: String,
     advice: PositionAdvice?,
-    analysing: Boolean,
+    coachText: String?,
+    thinking: Boolean,
     error: String?,
 ) {
     Card(
@@ -215,7 +247,7 @@ private fun AdviceCard(
             containerColor = if (error != null) Color(0xFFFCE8E6) else Color(0xFFF1F3F4),
         ),
     ) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             val whiteToMove = MoveNotation.isWhiteToMove(fen)
             Text(
                 "Ход " + MoveNotation.fullMoveNumber(fen) + ", " +
@@ -226,26 +258,38 @@ private fun AdviceCard(
             when {
                 error != null -> Text(error, style = MaterialTheme.typography.bodySmall)
 
-                analysing && advice == null ->
-                    Text("Движок считает…", style = MaterialTheme.typography.bodyMedium)
-
                 advice != null -> {
                     Text(
-                        "Оценка ${ScoreFormat.display(advice.scoreFromWhite)}",
+                        "Оценка " + ScoreFormat.display(advice.scoreFromWhite),
                         fontWeight = FontWeight.SemiBold,
                         style = MaterialTheme.typography.titleMedium,
                     )
                     Text(
-                        "Лучший ход: ${advice.bestMoveSan}  (глубина ${advice.depth})",
+                        "Лучший ход: " + advice.bestMoveSan,
                         style = MaterialTheme.typography.bodyMedium,
                     )
-                    // В M5 на это место встанет разбор тренера: почему именно так.
-                    Text(
-                        "Объяснение появится на следующем шаге разработки.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFF5F6368),
-                    )
+
+                    when {
+                        coachText != null -> Text(
+                            coachText,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+
+                        thinking -> Text(
+                            "Тренер разбирает позицию…",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF5F6368),
+                        )
+
+                        else -> Text(
+                            "Для этой позиции тренеру нечего добавить.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF5F6368),
+                        )
+                    }
                 }
+
+                thinking -> Text("Движок считает…", style = MaterialTheme.typography.bodyMedium)
 
                 else -> Text("Нет данных для этой позиции.")
             }

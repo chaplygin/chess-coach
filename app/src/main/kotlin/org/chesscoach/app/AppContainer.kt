@@ -1,6 +1,7 @@
 package org.chesscoach.app
 
 import android.content.Context
+import org.chesscoach.coach.CoachEngine
 import org.chesscoach.engine.EngineController
 import org.chesscoach.lichess.LichessApi
 import org.chesscoach.lichess.LichessClient
@@ -30,6 +31,12 @@ class AppContainer(context: Context) {
     val lichessOAuth: LichessOAuth get() = lichess.oauth
 
     val engine: EngineController by lazy { EngineController(applicationContext) }
+
+    /**
+     * Тренер держится один на приложение: внутри у него набор детекторов,
+     * создавать который заново на каждую позицию незачем.
+     */
+    val coach: CoachEngine by lazy { CoachEngine(StockfishEngineClient(engine)) }
 
     companion object {
         @Volatile

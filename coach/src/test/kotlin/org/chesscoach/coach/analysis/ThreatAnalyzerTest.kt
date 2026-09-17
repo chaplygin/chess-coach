@@ -119,4 +119,39 @@ class ThreatAnalyzerTest {
         assertEquals(listOf(forkFact), threat.consequences)
         assertTrue(unrelatedFact !in threat.consequences)
     }
+
+    @Test
+    fun `threat does not present a pre-existing feature as its consequence`() = runTest {
+        // Самая коварная неправда в этом разделе: назвать следствием угрозы то,
+        // что было на доске и до неё. Читается как "соперник сыграет Сd7, и конь
+        // окажется связан", хотя связывает его слон, стоящий там с начала партии.
+        val engine = FakeEngineClient(
+            mapOf(
+                CommonFens.FLIP_FORK_SETUP to listOf(
+                    EngineLine(multiPvIndex = 1, score = Score.Cp(200), pv = listOf("d4c2"), depth = 10),
+                ),
+            ),
+        )
+
+        val alreadyThere = ForkFact(
+            from = Square.C2,
+            piece = Piece.BLACK_KNIGHT,
+            targets = listOf(Square.A1, Square.E1),
+            favours = Side.BLACK,
+            evidence = Evidence.of(Square.C2, Square.A1, Square.E1),
+        )
+        val features = MapFeatureSource(
+            mapOf(
+                CommonFens.FORK_SETUP to FeatureSet.empty(CommonFens.FORK_SETUP)
+                    .copy(facts = listOf(alreadyThere)),
+                CommonFens.AFTER_FORK_MOVE to FeatureSet.empty(CommonFens.AFTER_FORK_MOVE)
+                    .copy(facts = listOf(alreadyThere)),
+            ),
+        )
+
+        val threat = ThreatAnalyzer(engine, features).analyse(CommonFens.FORK_SETUP, normalScore = Score.Cp(0))
+
+        checkNotNull(threat)
+        assertTrue(threat.consequences.toString(), threat.consequences.isEmpty())
+    }
 }
