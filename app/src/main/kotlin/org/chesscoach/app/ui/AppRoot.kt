@@ -11,7 +11,7 @@ import androidx.compose.ui.platform.LocalContext
 import org.chesscoach.app.AppContainer
 import org.chesscoach.core.GameSummary
 
-enum class Screen { LOGIN, GAMES, REVIEW, ENGINE }
+enum class Screen { LOGIN, GAMES, REVIEW, ENGINE, LIVE }
 
 @Composable
 fun AppRoot(redirect: Uri?, onRedirectHandled: () -> Unit) {
@@ -65,6 +65,7 @@ fun AppRoot(redirect: Uri?, onRedirectHandled: () -> Unit) {
                 screen = Screen.REVIEW
             },
             onOpenEngineCheck = { screen = Screen.ENGINE },
+            onOpenLiveGame = { screen = Screen.LIVE },
         )
 
         Screen.REVIEW -> {
@@ -85,6 +86,11 @@ fun AppRoot(redirect: Uri?, onRedirectHandled: () -> Unit) {
             onBack = {
                 screen = if (container.tokenStore.isSignedIn()) Screen.GAMES else Screen.LOGIN
             },
+        )
+
+        Screen.LIVE -> LiveGameScreen(
+            container = container,
+            onBack = { screen = Screen.GAMES },
         )
     }
 }

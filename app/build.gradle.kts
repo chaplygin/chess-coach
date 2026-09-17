@@ -56,6 +56,10 @@ dependencies {
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    // LocalLifecycleOwner из compose.ui.platform объявлен устаревшим и переехал
+    // сюда: живой экран обязан опрашивать Lichess только пока он на виду, и
+    // держаться на устаревшем API ради экономии одной зависимости не стоит.
+    implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.activity.compose)
     implementation(libs.kotlinx.coroutines.android)
     // Кэш разбора партии (filesDir/analysis/{gameId}.json) — тот же формат,

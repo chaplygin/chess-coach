@@ -42,6 +42,7 @@ fun GameListScreen(
     onSignOut: () -> Unit,
     onOpenGame: (GameSummary) -> Unit,
     onOpenEngineCheck: () -> Unit,
+    onOpenLiveGame: () -> Unit,
 ) {
     var games by remember { mutableStateOf<List<GameSummary>>(emptyList()) }
     var username by remember { mutableStateOf(container.tokenStore.username()) }
@@ -123,7 +124,10 @@ fun GameListScreen(
             }
         }
 
-        TextButton(onClick = onOpenEngineCheck) { Text("Проверить движок") }
+        Row {
+            TextButton(onClick = onOpenLiveGame) { Text("Текущая партия") }
+            TextButton(onClick = onOpenEngineCheck) { Text("Проверить движок") }
+        }
     }
 }
 
