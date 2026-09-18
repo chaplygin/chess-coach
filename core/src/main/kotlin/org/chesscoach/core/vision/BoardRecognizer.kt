@@ -44,8 +44,19 @@ enum class PhotoSource {
  * провал означало бы заставлять гадать, что именно переснять.
  */
 sealed interface RecognitionResult {
-    /** [cellConfidence] — уверенность по каждой из 64 клеток, в порядке a8..h1, как в [BoardLayout]. */
-    data class Recognized(val fen: String, val cellConfidence: List<Double>) : RecognitionResult
+    /**
+     * [cellConfidence] — уверенность по каждой из 64 клеток, в порядке a8..h1, как в [BoardLayout].
+     *
+     * [turnedAround] — доску пришлось развернуть: снимали её со стороны чёрных.
+     * Поле нужно экрану, чтобы честно сказать об этом человеку: разворот
+     * выбирается по расположению армий, а это догадка, пусть и почти всегда
+     * верная, и у человека должна остаться кнопка "перевернуть".
+     */
+    data class Recognized(
+        val fen: String,
+        val cellConfidence: List<Double>,
+        val turnedAround: Boolean,
+    ) : RecognitionResult
 
     /** Доску нашли, но часть фигур или всю расстановку целиком нельзя показать не проверив. */
     data class NotSure(val reason: String, val unreadableCells: List<String>) : RecognitionResult
@@ -88,7 +99,11 @@ object BoardRecognizer {
             )
         }
 
-        val placement = buildPlacement(raw.letters)
+        val turnedAround = looksTurnedAround(raw.letters)
+        val cells = if (turnedAround) turnAround(raw.letters) else raw.letters
+        val confidence = if (turnedAround) turnAround(raw.confidence) else raw.confidence
+
+        val placement = buildPlacement(cells)
         val fen = placement + " " + (if (whiteToMove) "w" else "b") + " - - 0 1"
 
         val legality = validateLegalPlacement(fen)
@@ -96,7 +111,21 @@ object BoardRecognizer {
             return RecognitionResult.NotSure(legality.reason, legality.squares)
         }
 
-        return RecognitionResult.Recognized(fen, raw.confidence)
+        return RecognitionResult.Recognized(fen, confidence, turnedAround)
+    }
+
+    /**
+     * Та же позиция, повёрнутая на пол-оборота: слева вертикаль h, снизу ряд 8.
+     *
+     * Нужна экрану для кнопки "перевернуть": выбор стороны — единственное
+     * место распознавания, где ответ не следует из снимка. Lichess рисует
+     * доску со стороны того, кто играет, и по самой картинке различить
+     * "белые внизу" и "чёрные внизу" нельзя иначе как по расположению фигур.
+     */
+    fun turnedAround(fen: String): String {
+        val cells = BoardLayout.parsePlacement(fen)
+        val rest = fen.trim().substringAfter(' ', "w - - 0 1")
+        return buildPlacement(turnAround(cells)) + " " + rest
     }
 
     private fun squareNameOf(index: Int): String = BoardLayout.squareName(index) ?: "?"
@@ -141,13 +170,12 @@ internal fun cellSignatures(image: GrayImage): List<DoubleArray?> {
         cell.shape?.let {
             doubleArrayOf(
                 it.heightFrac,
-                it.aspect,
+                it.widthFrac,
                 it.topFrac,
                 it.midFrac,
                 it.botFrac,
                 it.symmetry,
                 it.fill,
-                it.holesNorm,
             )
         }
     }
@@ -157,7 +185,14 @@ internal fun cellSignatures(image: GrayImage): List<DoubleArray?> {
 private class ScannedCell(
     val occupied: Boolean,
     val occupancyConfidence: Double,
-    val meanForeground: Double,
+    /**
+     * Насколько фигура светлее своего поля. Именно разница, а не яркость:
+     * под неровным светом одна и та же белая фигура в тени темнее, чем чёрная
+     * на освещённом краю доски, и любое общее на всю доску правило по яркости
+     * там ошибается. А вот "светлее или темнее своей клетки" от освещения не
+     * зависит вовсе: свет действует на фигуру и на поле под ней одинаково.
+     */
+    val relativeForeground: Double,
     val shape: ShapeFeatures?,
 )
 
@@ -192,7 +227,7 @@ private fun readBoard(image: GrayImage, region: BoardRegion): List<ScannedCell> 
             // Порог контраста подстраивается под контраст самой доски: у тёмных
             // деревянных досок разница между клетками меньше, чем у ярких
             // пластиковых, и фиксированное число било бы мимо в обе стороны.
-            val boardContrast = max(18.0, abs(region.lightAvg - region.darkAvg) / 3.0)
+            val boardContrast = max(12.0, abs(region.lightAvg - region.darkAvg) / 6.0)
             // И под освещение конкретной клетки. Свет действует умножением: в
             // затенённом углу доски все яркости меньше в одно и то же число раз,
             // а вместе с ними и разница между фигурой и полем. Общий порог там
@@ -203,7 +238,12 @@ private fun readBoard(image: GrayImage, region: BoardRegion): List<ScannedCell> 
             val reading = readCell(cell, localRef, contrastScale)
             val shape = if (reading.occupied) shapeFeatures(reading.mask, cell.width, cell.height) else null
             scanned.add(
-                ScannedCell(reading.occupied, reading.occupancyConfidence, reading.meanForeground, shape)
+                ScannedCell(
+                    reading.occupied,
+                    reading.occupancyConfidence,
+                    reading.meanForeground - localRef,
+                    shape,
+                )
             )
         }
     }
@@ -215,7 +255,7 @@ private fun readBoard(image: GrayImage, region: BoardRegion): List<ScannedCell> 
         ScannedCell(
             cell.occupied,
             cell.occupancyConfidence,
-            cell.meanForeground,
+            cell.relativeForeground,
             shape.copy(heightFrac = shape.heightFrac / tallest),
         )
     }
@@ -292,8 +332,12 @@ private fun readCells(image: GrayImage, region: BoardRegion): RawCellReadings? {
         }
 
         val (type, typeConfidence) = classifyPieceType(shape)
-        val combined = minOf(cell.occupancyConfidence, colors.confidence(cell.meanForeground), typeConfidence)
-        cellLetters[index] = pieceLetter(type, colors.isWhite(cell.meanForeground))
+        val combined = minOf(
+            cell.occupancyConfidence,
+            colors.confidence(cell.relativeForeground),
+            typeConfidence,
+        )
+        cellLetters[index] = pieceLetter(type, colors.isWhite(cell.relativeForeground))
         cellConfidence[index] = combined
     }
 
@@ -303,16 +347,18 @@ private fun readCells(image: GrayImage, region: BoardRegion): RawCellReadings? {
 /**
  * Граница между белыми и чёрными фигурами, посчитанная по самой доске.
  *
- * Абсолютный порог "ярче половины шкалы — значит белая" верен для экрана, где
- * фигуры почти чисто белые и чёрные, и неверен для настоящего набора: там
- * "белая" фигура кремовая, "чёрная" тёмно-коричневая, и обе могут оказаться по
- * одну сторону от середины шкалы. Поэтому порог ищется между двумя скоплениями
- * яркости прямо на этом снимке — методом Оцу, то есть перебором границы с
- * максимальной межгрупповой дисперсией.
+ * Сравнивается не яркость фигуры, а её превышение над своим полем. Абсолютный
+ * порог "ярче половины шкалы — значит белая" верен только для экрана: на
+ * деревянном наборе "белая" фигура кремовая, "чёрная" тёмно-коричневая, и обе
+ * могут оказаться по одну сторону от середины шкалы. Но и одного правила
+ * "светлее своего поля" мало: у наборов с близкими оттенками превышение бывает
+ * маленьким и с обеих сторон одного знака. Поэтому граница ищется между двумя
+ * скоплениями превышений прямо на этом снимке — методом Оцу, то есть перебором
+ * с максимальной межгрупповой дисперсией.
  */
 private class ColorSplit(val threshold: Double, val separation: Double) {
 
-    fun isWhite(meanForeground: Double): Boolean = meanForeground > threshold
+    fun isWhite(relativeForeground: Double): Boolean = relativeForeground > threshold
 
     /**
      * Уверенность падает и когда фигура близка к границе, и когда сами
@@ -320,9 +366,9 @@ private class ColorSplit(val threshold: Double, val separation: Double) {
      * и это верно — на снимке, где фигуры обоих цветов неразличимы, нечего
      * показывать с уверенным видом.
      */
-    fun confidence(meanForeground: Double): Double {
+    fun confidence(relativeForeground: Double): Double {
         if (separation < MIN_COLOR_SEPARATION) return 0.0
-        return (abs(meanForeground - threshold) / (separation / 2.0)).coerceIn(0.0, 1.0)
+        return (abs(relativeForeground - threshold) / (separation / 2.0)).coerceIn(0.0, 1.0)
     }
 }
 
@@ -334,10 +380,12 @@ private class ColorSplit(val threshold: Double, val separation: Double) {
 private const val MIN_COLOR_SEPARATION = 30.0
 
 private fun colorSplit(scanned: List<ScannedCell>): ColorSplit {
-    val values = scanned.filter { it.occupied }.map { it.meanForeground }.sorted()
-    if (values.size < 2) return ColorSplit(127.5, 255.0)
+    val values = scanned.filter { it.occupied }.map { it.relativeForeground }.sorted()
+    // Ноль — фигура ровно той же яркости, что и её поле. Разумное значение по
+    // умолчанию, когда фигур слишком мало, чтобы искать границу между группами.
+    if (values.size < 2) return ColorSplit(0.0, 255.0)
 
-    var bestThreshold = 127.5
+    var bestThreshold = 0.0
     var bestScore = -1.0
     var bestSeparation = 0.0
     for (cut in 1 until values.size) {
@@ -427,17 +475,47 @@ private fun findBoardRegion(image: GrayImage): BoardRegion? {
     if (minDim < MIN_BOARD_SIZE) return null
 
     val integral = IntegralImage(image)
+    val coarse = coarseCandidates(integral, image, minDim)
+    if (coarse.isEmpty()) return null
 
-    var best: BoardRegion? = null
-    var bestScore = MIN_BOARD_SCORE
+    var best: Placement? = null
+    for (candidate in coarse) {
+        val refined = refinePlacement(integral, image, candidate)
+        if (best == null || refined.score > best.score) best = refined
+    }
 
-    val sizeSteps = 10
-    val posSteps = 8
-    for (sizeIndex in 0 until sizeSteps) {
-        val fraction = 1.0 - sizeIndex * 0.05
-        val size = (minDim * fraction).toInt()
-        if (size < MIN_BOARD_SIZE) continue
+    val found = best ?: return null
+    if (found.score <= MIN_BOARD_SCORE) return null
+    val reading = checkerScore(integral, found.x0, found.y0, found.size) ?: return null
+    return BoardRegion(found.x0, found.y0, found.size, reading.lightAvg, reading.darkAvg, reading.lightParity)
+}
 
+/** Квадрат-кандидат вместе с его показателем чередования. */
+private data class Placement(val x0: Int, val y0: Int, val size: Int, val score: Double)
+
+/**
+ * Сколько лучших грубых кандидатов доводить до точного положения.
+ *
+ * Больше одного потому, что грубая сетка сравнивает заведомо смещённые
+ * квадраты: доска, промазанная на треть клетки, набирает меньше почти
+ * случайного квадрата рядом, и победитель грубого прохода не обязан быть
+ * победителем после уточнения.
+ */
+private const val REFINE_CANDIDATES = 6
+
+/**
+ * Грубый проход: редкая сетка положений и размеров.
+ *
+ * Шаг здесь намеренно крупный — точное положение ищет [refinePlacement].
+ * Зато диапазон размеров широкий: доска занимает весь кадр только на обрезанном
+ * скриншоте, а на снимке экрана телефона вокруг неё ещё половина интерфейса.
+ */
+private fun coarseCandidates(integral: IntegralImage, image: GrayImage, minDim: Int): List<Placement> {
+    val found = ArrayList<Placement>()
+    val posSteps = 12
+
+    var size = minDim
+    while (size >= MIN_BOARD_SIZE && size >= minDim / 5) {
         val maxX = image.width - size
         val maxY = image.height - size
         val xStep = max(1, maxX / posSteps)
@@ -448,16 +526,60 @@ private fun findBoardRegion(image: GrayImage): BoardRegion? {
             var y0 = 0
             while (y0 <= maxY) {
                 val candidate = checkerScore(integral, x0, y0, size)
-                if (candidate != null && candidate.score > bestScore) {
-                    bestScore = candidate.score
-                    best = BoardRegion(x0, y0, size, candidate.lightAvg, candidate.darkAvg, candidate.lightParity)
-                }
+                if (candidate != null) found.add(Placement(x0, y0, size, candidate.score))
                 if (maxY == 0) break
                 y0 += yStep
             }
             if (maxX == 0) break
             x0 += xStep
         }
+
+        size = (size * 0.85).toInt()
+    }
+
+    return found.sortedByDescending { it.score }.take(REFINE_CANDIDATES)
+}
+
+/**
+ * Доводка квадрата до точного положения покоординатным спуском с уменьшающимся
+ * шагом.
+ *
+ * Без неё вся работа впустую, и это не предположение: на настоящем скриншоте
+ * телефона грубая сетка давала промах в десять пикселей при клетке в семьдесят
+ * четыре. Десять пикселей — это срезанная макушка у каждой фигуры и полоска
+ * соседней клетки в кадре, то есть и рост, и силуэт меряются не у той фигуры.
+ * Синтетические тесты этого не ловили: там доска занимала кадр целиком, и
+ * нулевое смещение всегда оказывалось среди кандидатов случайно.
+ */
+private fun refinePlacement(integral: IntegralImage, image: GrayImage, start: Placement): Placement {
+    var best = start
+    var step = max(1, start.size / 16)
+
+    while (step >= 1) {
+        var improved = true
+        while (improved) {
+            improved = false
+            for (dx in -1..1) {
+                for (dy in -1..1) {
+                    for (ds in -1..1) {
+                        if (dx == 0 && dy == 0 && ds == 0) continue
+                        val x0 = best.x0 + dx * step
+                        val y0 = best.y0 + dy * step
+                        val size = best.size + ds * step
+                        if (size < MIN_BOARD_SIZE) continue
+                        if (x0 < 0 || y0 < 0) continue
+                        if (x0 + size > image.width || y0 + size > image.height) continue
+                        val candidate = checkerScore(integral, x0, y0, size) ?: continue
+                        if (candidate.score > best.score) {
+                            best = Placement(x0, y0, size, candidate.score)
+                            improved = true
+                        }
+                    }
+                }
+            }
+        }
+        if (step == 1) break
+        step /= 2
     }
 
     return best
@@ -475,43 +597,72 @@ private data class CheckerCandidate(val score: Double, val lightAvg: Double, val
  */
 private fun checkerScore(integral: IntegralImage, x0: Int, y0: Int, size: Int): CheckerCandidate? {
     val cellSize = size / 8.0
-    val cellAvg = Array(8) { DoubleArray(8) }
+    val groupEven = ArrayList<Double>(32)
+    val groupOdd = ArrayList<Double>(32)
+
     for (row in 0 until 8) {
         for (col in 0 until 8) {
             val cx0 = x0 + (col * cellSize).toInt()
             val cy0 = y0 + (row * cellSize).toInt()
             val cx1 = x0 + ((col + 1) * cellSize).toInt()
             val cy1 = y0 + ((row + 1) * cellSize).toInt()
-            cellAvg[row][col] = integral.average(cx0, cy0, cx1, cy1)
+            val value = cornerBrightness(integral, cx0, cy0, cx1, cy1) ?: return null
+            if ((row + col) % 2 == 0) groupEven.add(value) else groupOdd.add(value)
         }
     }
 
-    val groupEven = ArrayList<Double>(32)
-    val groupOdd = ArrayList<Double>(32)
-    for (row in 0 until 8) {
-        for (col in 0 until 8) {
-            if ((row + col) % 2 == 0) groupEven.add(cellAvg[row][col]) else groupOdd.add(cellAvg[row][col])
-        }
-    }
-
-    val meanEven = groupEven.average()
-    val meanOdd = groupOdd.average()
-    val diff = abs(meanEven - meanOdd)
+    val centerEven = median(groupEven)
+    val centerOdd = median(groupOdd)
+    val diff = abs(centerEven - centerOdd)
     if (diff < MIN_LIGHT_DARK_DIFF) return null
 
-    val spread = stddev(groupEven, meanEven) + stddev(groupOdd, meanOdd) + 1.0
+    val spread = deviation(groupEven, centerEven) + deviation(groupOdd, centerOdd) + 1.0
     val score = diff / spread
 
-    val lightParity = if (meanEven > meanOdd) 0 else 1
-    val lightAvg = maxOf(meanEven, meanOdd)
-    val darkAvg = minOf(meanEven, meanOdd)
+    val lightParity = if (centerEven > centerOdd) 0 else 1
+    val lightAvg = maxOf(centerEven, centerOdd)
+    val darkAvg = minOf(centerEven, centerOdd)
     return CheckerCandidate(score, lightAvg, darkAvg, lightParity)
 }
 
-private fun stddev(values: List<Double>, mean: Double): Double {
-    val variance = values.sumOf { (it - mean) * (it - mean) } / values.size
-    return sqrt(variance)
+/**
+ * Яркость самой клетки, а не того, что на ней стоит: среднее по четырём углам,
+ * из которых берётся медиана.
+ *
+ * Считать среднее по всей клетке нельзя — фигура занимает больше половины её
+ * площади, и на начальной позиции разброс внутри группы взлетает так, что
+ * показатель чередования падает ниже порога: нарисованная идеально доска
+ * просто не находится. Углы же фигура не закрывает: она стоит в середине и
+ * сужается кверху. Медиана из четырёх, а не среднее, — чтобы широкое основание,
+ * заехавшее в нижние углы, не утащило значение за собой.
+ */
+private fun cornerBrightness(integral: IntegralImage, x0: Int, y0: Int, x1: Int, y1: Int): Double? {
+    val box = ((x1 - x0) * 0.22).toInt()
+    if (box < 1) return integral.average(x0, y0, x1, y1)
+
+    val corners = listOf(
+        integral.average(x0, y0, x0 + box, y0 + box),
+        integral.average(x1 - box, y0, x1, y0 + box),
+        integral.average(x0, y1 - box, x0 + box, y1),
+        integral.average(x1 - box, y1 - box, x1, y1),
+    )
+    return median(corners)
 }
+
+private fun median(values: List<Double>): Double {
+    if (values.isEmpty()) return 0.0
+    val sorted = values.sorted()
+    val middle = sorted.size / 2
+    return if (sorted.size % 2 == 1) sorted[middle] else (sorted[middle - 1] + sorted[middle]) / 2.0
+}
+
+/**
+ * Медианное отклонение от центра группы вместо среднеквадратичного: одна
+ * клетка, у которой углы всё-таки закрыты фигурой, не должна портить оценку
+ * всей доски.
+ */
+private fun deviation(values: List<Double>, center: Double): Double =
+    median(values.map { abs(it - center) })
 
 /** Таблица частичных сумм яркости — среднее по любому прямоугольнику за O(1). */
 private class IntegralImage(image: GrayImage) {
@@ -559,8 +710,17 @@ private fun brightnessOf(pixel: Int): Int {
 // Этапы б и в: клетки с отступом, пусто/занято, цвет фигуры.
 // ---------------------------------------------------------------------------
 
-/** Отступ от краёв клетки, чтобы не зацепить соседнюю фигуру или линию доски. */
-private const val CELL_INSET_FRACTION = 0.10
+/**
+ * Отступ от краёв клетки, чтобы не зацепить соседнюю фигуру или линию доски.
+ *
+ * Маленький намеренно. На экране фигуру рисуют почти во всю клетку, и отступ
+ * в десятую часть срезал ей макушку: после этого и король, и ферзь, и слон, и
+ * пешка упирались в верхний край окна и получали одинаковый рост. Рост —
+ * главный признак, отличающий пешку от слона, и обрезанный он не отличает
+ * ничего. Синтетические доски этого не показывали: там фигуры рисовались
+ * заведомо мельче клетки, то есть под уже выбранный отступ.
+ */
+private const val CELL_INSET_FRACTION = 0.03
 
 private class Cell(val brightness: IntArray, val width: Int, val height: Int)
 
@@ -570,10 +730,13 @@ private fun extractCell(image: GrayImage, region: BoardRegion, row: Int, col: In
     val fullY0 = region.y0 + row * cellSize
     val inset = cellSize * CELL_INSET_FRACTION
 
-    val x0 = (fullX0 + inset).toInt().coerceIn(0, image.width - 1)
-    val y0 = (fullY0 + inset).toInt().coerceIn(0, image.height - 1)
-    val x1 = (fullX0 + cellSize - inset).toInt().coerceIn(x0 + 1, image.width)
-    val y1 = (fullY0 + cellSize - inset).toInt().coerceIn(y0 + 1, image.height)
+    // Округление, а не отбрасывание дробной части: клетка редко бывает целым
+    // числом пикселей, и систематический сдвиг вниз-влево на полпикселя
+    // накапливается по доске в полосу чужой клетки внутри окна.
+    val x0 = Math.round(fullX0 + inset).toInt().coerceIn(0, image.width - 1)
+    val y0 = Math.round(fullY0 + inset).toInt().coerceIn(0, image.height - 1)
+    val x1 = Math.round(fullX0 + cellSize - inset).toInt().coerceIn(x0 + 1, image.width)
+    val y1 = Math.round(fullY0 + cellSize - inset).toInt().coerceIn(y0 + 1, image.height)
 
     val w = x1 - x0
     val h = y1 - y0
@@ -598,9 +761,179 @@ private class CellReading(
     val mask: BooleanArray,
     val occupied: Boolean,
     val occupancyConfidence: Double,
-    /** Средняя яркость пикселей фигуры. Белая она или чёрная, решается по всей доске сразу. */
+    /** Яркость тела фигуры. Белая она или чёрная, решается по всей доске сразу. */
     val meanForeground: Double,
 )
+
+/**
+ * Яркость тела фигуры: медиана по силуэту, ужатому внутрь на пару пикселей.
+ *
+ * И ужимание, и медиана здесь не украшение. На экране фигуру рисуют контуром
+ * противоположного цвета: у белой фигуры обводка чёрная, у чёрной белая. У
+ * тонкой фигуры вроде слона эта обводка занимает чуть ли не половину площади
+ * силуэта, и среднее по нему выходит темнее светлого поля — то есть белый
+ * слон по среднему получается тёмным. Ужатый силуэт обводки не содержит вовсе,
+ * а медиана добивает остатки.
+ */
+private fun bodyBrightness(cell: Cell, mask: BooleanArray): Double? {
+    var core = mask
+    repeat(2) {
+        val next = erodeOnce(core, cell.width, cell.height)
+        var any = false
+        for (value in next) if (value) { any = true; break }
+        if (!any) return@repeat
+        core = next
+    }
+
+    val values = ArrayList<Int>()
+    for (i in core.indices) if (core[i]) values.add(cell.brightness[i])
+    if (values.isEmpty()) {
+        for (i in mask.indices) if (mask[i]) values.add(cell.brightness[i])
+    }
+    if (values.isEmpty()) return null
+    values.sort()
+    return values[values.size / 2].toDouble()
+}
+
+private fun erodeOnce(mask: BooleanArray, width: Int, height: Int): BooleanArray {
+    val eroded = BooleanArray(mask.size)
+    for (y in 0 until height) {
+        for (x in 0 until width) {
+            val index = y * width + x
+            if (!mask[index]) continue
+            eroded[index] = x > 0 && x < width - 1 && y > 0 && y < height - 1 &&
+                mask[index - 1] && mask[index + 1] && mask[index - width] && mask[index + width]
+        }
+    }
+    return eroded
+}
+
+/**
+ * Заливка внутренностей силуэта.
+ *
+ * На экране фигуру рисуют контуром: белая фигура — это белая заливка в чёрной
+ * обводке, чёрная — чёрная заливка в белой. Порог по отличию от фона сам по
+ * себе даёт обе части, но внутри остаются просветы (крест на короне, прорезь
+ * митры), а на тёмной клетке белая заливка местами сливается с полем. После
+ * заливки силуэт становится сплошным пятном независимо от того, рисован он
+ * контуром или залит целиком, и дальше форма меряется одинаково для экрана и
+ * для фотографии деревянного набора.
+ */
+private fun fillEnclosedHoles(mask: BooleanArray, width: Int, height: Int) {
+    val outside = BooleanArray(mask.size)
+    val queue = ArrayDeque<Int>()
+
+    fun seed(index: Int) {
+        if (!mask[index] && !outside[index]) {
+            outside[index] = true
+            queue.addLast(index)
+        }
+    }
+
+    for (x in 0 until width) {
+        seed(x)
+        seed((height - 1) * width + x)
+    }
+    for (y in 0 until height) {
+        seed(y * width)
+        seed(y * width + width - 1)
+    }
+
+    while (queue.isNotEmpty()) {
+        val index = queue.removeFirst()
+        val x = index % width
+        val y = index / width
+        if (x > 0) seed(index - 1)
+        if (x < width - 1) seed(index + 1)
+        if (y > 0) seed(index - width)
+        if (y < height - 1) seed(index + width)
+    }
+
+    for (i in mask.indices) {
+        if (!mask[i] && !outside[i]) mask[i] = true
+    }
+}
+
+/**
+ * Размыкание: сжать маску, оставить самый крупный кусок, разжать обратно.
+ *
+ * Сжатие на один пиксель отрывает от фигуры всё, что держится на тонкой
+ * перемычке, и начисто съедает полоски шириной в пару пикселей. Оба случая —
+ * не выдумка, а то, что видно на настоящем скриншоте: Lichess подписывает
+ * вертикали и горизонтали прямо в угловых клетках, и буква "b" срасталась с
+ * широким основанием слона, а на стыке клеток в окно попадала полоска соседнего
+ * поля. И то, и другое растягивало рамку силуэта до края клетки, после чего
+ * пешка и король оказывались одного роста.
+ */
+private fun openMask(mask: BooleanArray, width: Int, height: Int) {
+    val eroded = erodeOnce(mask, width, height)
+    keepLargestBlob(eroded, width, height)
+
+    // Разжимаем обратно, но только внутри исходной маски: иначе силуэт вырастет
+    // на пиксель со всех сторон и рост фигуры окажется завышенным.
+    val grown = BooleanArray(mask.size)
+    for (y in 0 until height) {
+        for (x in 0 until width) {
+            val index = y * width + x
+            if (!eroded[index]) continue
+            grown[index] = true
+            if (x > 0 && mask[index - 1]) grown[index - 1] = true
+            if (x < width - 1 && mask[index + 1]) grown[index + 1] = true
+            if (y > 0 && mask[index - width]) grown[index - width] = true
+            if (y < height - 1 && mask[index + width]) grown[index + width] = true
+        }
+    }
+
+    // Если фигура настолько тонкая, что сжатие съело её целиком, оставляем
+    // маску как была: лучше шумный силуэт, чем пустая клетка.
+    var any = false
+    for (value in grown) if (value) { any = true; break }
+    if (!any) return
+    for (i in mask.indices) mask[i] = grown[i]
+}
+
+/** Оставляем в маске только самый крупный связный кусок. */
+private fun keepLargestBlob(mask: BooleanArray, width: Int, height: Int) {
+    val label = IntArray(mask.size) { -1 }
+    var bestLabel = -1
+    var bestSize = 0
+    var next = 0
+
+    val queue = ArrayDeque<Int>()
+    for (start in mask.indices) {
+        if (!mask[start] || label[start] >= 0) continue
+        val current = next++
+        var size = 0
+        label[start] = current
+        queue.addLast(start)
+        while (queue.isNotEmpty()) {
+            val index = queue.removeFirst()
+            size++
+            val x = index % width
+            val y = index / width
+            if (x > 0) push(mask, label, queue, index - 1, current)
+            if (x < width - 1) push(mask, label, queue, index + 1, current)
+            if (y > 0) push(mask, label, queue, index - width, current)
+            if (y < height - 1) push(mask, label, queue, index + width, current)
+        }
+        if (size > bestSize) {
+            bestSize = size
+            bestLabel = current
+        }
+    }
+
+    if (bestLabel < 0) return
+    for (i in mask.indices) {
+        if (mask[i] && label[i] != bestLabel) mask[i] = false
+    }
+}
+
+private fun push(mask: BooleanArray, label: IntArray, queue: ArrayDeque<Int>, index: Int, current: Int) {
+    if (mask[index] && label[index] < 0) {
+        label[index] = current
+        queue.addLast(index)
+    }
+}
 
 /**
  * Пусто или занято решаем через отклонение от ожидаемого фона клетки, а не
@@ -609,16 +942,16 @@ private class CellReading(
  */
 private fun readCell(cell: Cell, backgroundRef: Double, contrastScale: Double): CellReading {
     val mask = BooleanArray(cell.brightness.size)
-    var fgCount = 0
-    var fgSum = 0L
     for (i in cell.brightness.indices) {
         val diff = cell.brightness[i] - backgroundRef
-        if (abs(diff) > contrastScale) {
-            mask[i] = true
-            fgCount++
-            fgSum += cell.brightness[i]
-        }
+        if (abs(diff) > contrastScale) mask[i] = true
     }
+
+    fillEnclosedHoles(mask, cell.width, cell.height)
+    openMask(mask, cell.width, cell.height)
+
+    var fgCount = 0
+    for (i in mask.indices) if (mask[i]) fgCount++
 
     val total = cell.brightness.size.coerceAtLeast(1)
     val fillRatio = fgCount.toDouble() / total
@@ -633,9 +966,7 @@ private fun readCell(cell: Cell, backgroundRef: Double, contrastScale: Double): 
             0.6 + (fillRatio - EMPTY_UPPER_BOUND) / (OCCUPIED_LOWER_CONFIDENT - EMPTY_UPPER_BOUND) * 0.4
     }.coerceIn(0.0, 1.0)
 
-    val meanForeground = if (fgCount > 0) fgSum.toDouble() / fgCount else backgroundRef
-
-    return CellReading(mask, occupied, occupancyConfidence, meanForeground)
+    return CellReading(mask, occupied, occupancyConfidence, bodyBrightness(cell, mask) ?: backgroundRef)
 }
 
 // ---------------------------------------------------------------------------
@@ -645,16 +976,24 @@ private fun readCell(cell: Cell, backgroundRef: Double, contrastScale: Double): 
 private enum class RecognizedPieceType { KING, QUEEN, ROOK, BISHOP, KNIGHT, PAWN }
 
 private data class ShapeFeatures(
-    /** Высота силуэта к высоте клетки: единственный признак, отличающий пешку от слона. */
+    /**
+     * От низа клетки до макушки силуэта, в долях высоты клетки.
+     *
+     * Меряется именно от низа, а не по рамке силуэта: и на экране, и на
+     * фотографии фигура стоит на своей клетке, то есть её основание всегда
+     * внизу, а отличается она макушкой. Заодно это спасает от срезанного
+     * отступом основания — оно всё равно упирается в край.
+     */
     val heightFrac: Double,
-    val aspect: Double,
+    /** Ширина силуэта в долях ширины клетки: пешка узкая, ферзь широкий. */
+    val widthFrac: Double,
     val topFrac: Double,
     val midFrac: Double,
     val botFrac: Double,
     val symmetry: Double,
     val fill: Double,
-    val holesNorm: Double,
 )
+
 
 /**
  * Признаки формы считаются в рамке собственного bounding box силуэта — иначе
@@ -684,7 +1023,7 @@ private fun shapeFeatures(mask: BooleanArray, width: Int, height: Int): ShapeFea
 
     val boxW = maxX - minX + 1
     val boxH = maxY - minY + 1
-    val aspect = boxW.toDouble() / boxH
+    val widthFrac = boxW.toDouble() / width
 
     fun columnHasForegroundInBand(x: Int, y0: Int, y1: Int): Boolean {
         for (y in y0 until y1) {
@@ -724,69 +1063,10 @@ private fun shapeFeatures(mask: BooleanArray, width: Int, height: Int): ShapeFea
     }
     val fill = fgCount.toDouble() / (boxW * boxH)
 
-    val holes = countHoles(mask, width, minX, minY, maxX, maxY)
-    val holesNorm = holes.coerceAtMost(3) / 3.0
-
-    val heightFrac = boxH.toDouble() / height
-    return ShapeFeatures(heightFrac, aspect, thirds[0], thirds[1], thirds[2], symmetry, fill, holesNorm)
+    val heightFrac = (height - minY).toDouble() / height
+    return ShapeFeatures(heightFrac, widthFrac, thirds[0], thirds[1], thirds[2], symmetry, fill)
 }
 
-/**
- * Число замкнутых "дыр" в силуэте — фон внутри bounding box, не связанный с
- * его границей. Мелкий шум сглаживания (один-два случайных пикселя на стыке
- * контура) отфильтровываем по площади: иначе на низком разрешении реальной
- * клетки это число становится случайным, а не признаком формы.
- */
-private fun countHoles(mask: BooleanArray, fullWidth: Int, minX: Int, minY: Int, maxX: Int, maxY: Int): Int {
-    val boxW = maxX - minX + 1
-    val boxH = maxY - minY + 1
-    val background = BooleanArray(boxW * boxH)
-    for (y in 0 until boxH) {
-        for (x in 0 until boxW) {
-            background[y * boxW + x] = !mask[(minY + y) * fullWidth + (minX + x)]
-        }
-    }
-
-    fun idx(y: Int, x: Int) = y * boxW + x
-
-    val outside = BooleanArray(boxW * boxH)
-    val stack = ArrayDeque<Int>()
-    for (x in 0 until boxW) {
-        if (background[idx(0, x)] && !outside[idx(0, x)]) {
-            outside[idx(0, x)] = true
-            stack.addLast(idx(0, x))
-        }
-        if (background[idx(boxH - 1, x)] && !outside[idx(boxH - 1, x)]) {
-            outside[idx(boxH - 1, x)] = true
-            stack.addLast(idx(boxH - 1, x))
-        }
-    }
-    for (y in 0 until boxH) {
-        if (background[idx(y, 0)] && !outside[idx(y, 0)]) {
-            outside[idx(y, 0)] = true
-            stack.addLast(idx(y, 0))
-        }
-        if (background[idx(y, boxW - 1)] && !outside[idx(y, boxW - 1)]) {
-            outside[idx(y, boxW - 1)] = true
-            stack.addLast(idx(y, boxW - 1))
-        }
-    }
-    floodFillOutside(stack, background, outside, boxW, boxH)
-
-    val visited = BooleanArray(boxW * boxH)
-    val minArea = max(2, (boxW * boxH * 0.01).toInt())
-    var holes = 0
-    for (y in 0 until boxH) {
-        for (x in 0 until boxW) {
-            val i = idx(y, x)
-            if (background[i] && !outside[i] && !visited[i]) {
-                val area = floodFillArea(i, background, outside, visited, boxW, boxH)
-                if (area >= minArea) holes++
-            }
-        }
-    }
-    return holes
-}
 
 private fun floodFillOutside(
     stack: ArrayDeque<Int>,
@@ -856,72 +1136,76 @@ private inline fun forEachNeighbor(y: Int, x: Int, boxW: Int, boxH: Int, action:
 private class Prototype(
     val type: RecognizedPieceType,
     val height: Double,
-    val aspect: Double,
+    val width: Double,
     val top: Double,
     val mid: Double,
     val bot: Double,
     val symmetry: Double,
     val fill: Double,
-    val holesNorm: Double,
 )
 
-// Числа измерены этим же кодом (extractCell с 10%-отступом + shapeFeatures) на
-// эталонном рендере каждой фигуры, а не на изолированном скрипте с другим
-// порогом бинаризации: первая версия эталонов была откалибрована отдельным
-// скриптом с иным порогом и числом "дыр", из-за чего пешка и слон, ферзь и
-// король путались почти всегда — расстояние до чужого эталона оказывалось
-// меньше расстояния до своего же. Смотри BoardRecognizerTest за реальными
-// цифрами точности на этой версии.
+// Эталоны измерены этим же кодом на настоящем скриншоте Lichess
+// (core/src/test/resources/vision/lichess-screenshot.png) — по всем фигурам
+// каждого типа, что были на доске, среднее по ним.
+//
+// Мерить эталоны на нарисованной нами же доске оказалось ошибкой, и дорогой:
+// пропорции придуманных силуэтов не совпали с настоящими, и на первом же
+// присланном скриншоте все фигуры прочитались как короли и ферзи. Числа ниже
+// взяты у того самого набора, который человек и снимает.
+//
+// Разброс внутри типа при этом ничтожен: у двенадцати пешек рост совпал с
+// точностью до полутора процентов, у четырёх ладей — до полутора. Фигуры
+// одного типа на экране рисуются одной и той же картинкой, поэтому признаки
+// у них совпадают почти пиксель в пиксель.
 private val PROTOTYPES = listOf(
-    Prototype(RecognizedPieceType.KING, 1.000, 0.681, 0.500, 0.625, 1.000, 1.000, 0.523, 0.000),
-    Prototype(RecognizedPieceType.QUEEN, 0.894, 0.714, 0.733, 0.600, 1.000, 1.000, 0.526, 0.000),
-    Prototype(RecognizedPieceType.ROOK, 0.713, 0.672, 0.801, 0.623, 1.000, 1.000, 0.672, 0.000),
-    Prototype(RecognizedPieceType.BISHOP, 0.818, 0.704, 0.444, 0.517, 1.000, 0.972, 0.437, 0.121),
-    Prototype(RecognizedPieceType.KNIGHT, 0.757, 0.675, 0.774, 0.708, 1.000, 0.891, 0.621, 0.000),
-    Prototype(RecognizedPieceType.PAWN, 0.572, 0.670, 0.470, 0.454, 1.000, 0.999, 0.502, 0.000),
+    Prototype(RecognizedPieceType.KING, 0.970, 0.822, 0.800, 1.000, 0.783, 0.968, 0.586),
+    Prototype(RecognizedPieceType.QUEEN, 0.985, 0.920, 0.851, 0.842, 0.693, 0.962, 0.589),
+    Prototype(RecognizedPieceType.ROOK, 0.901, 0.685, 0.859, 0.665, 1.000, 0.974, 0.754),
+    Prototype(RecognizedPieceType.BISHOP, 0.985, 0.870, 0.468, 0.534, 1.000, 0.918, 0.431),
+    // Конь — единственный тип, которого не было на присланном скриншоте, и
+    // его эталон пока не измерен, а оценён: рост и ширина между ладьёй и
+    // королём, симметрия низкая (конь смотрит вбок — единственная незеркальная
+    // фигура). До замера на настоящей начальной позиции эти семь чисел —
+    // единственное место во всём распознавании, взятое не из измерения.
+    Prototype(RecognizedPieceType.KNIGHT, 0.930, 0.760, 0.700, 0.780, 0.950, 0.700, 0.640),
+    Prototype(RecognizedPieceType.PAWN, 0.902, 0.590, 0.548, 0.747, 1.000, 0.978, 0.635),
 )
 
-// Асимметрия — единственный надёжный признак коня среди всех шести фигур,
-// поэтому у неё вес заметно выше остальных.
-// Рост фигуры в клетке — единственное, что надёжно отделяет пешку от остальных,
-// поэтому вес высокий. Расплата: на фото сбоку ближние фигуры выше дальних,
-// но такой кадр и так не проходит поиск доски (требуется съёмка сверху).
-private const val WEIGHT_HEIGHT = 2.0
+// Асимметрия — единственный признак коня, не зависящий ни от набора фигур, ни
+// от экрана: конь смотрит вбок, все остальные фигуры зеркальны. Поэтому вес
+// выше среднего.
+private const val WEIGHT_SYMMETRY = 1.5
 
-private const val WEIGHT_ASPECT = 1.0
+// Рост и ширина силуэта — два самых устойчивых признака: они измеряются в долях
+// клетки и одинаковы у всех фигур одного типа на одной доске с точностью до
+// пикселя (проверено на настоящем скриншоте: двенадцать пешек дали разброс
+// роста в полпроцента).
+private const val WEIGHT_HEIGHT = 2.0
+private const val WEIGHT_WIDTH = 2.0
+
 private const val WEIGHT_TOP = 1.2
 private const val WEIGHT_MID = 1.0
 private const val WEIGHT_BOT = 1.0
-private const val WEIGHT_SYMMETRY = 1.5
-private const val WEIGHT_FILL = 1.0
-
-// Число "дыр" оказалось самым шумным признаком: на реальных клетках оно
-// прыгает от фона (светлая клетка/тёмная, белая фигура/чёрная) сильнее, чем
-// меняется между типами фигур (см. отчёт по BoardRecognizerTest — ладья
-// путалась с пешкой именно из-за этого). Вес небольшой, признак остаётся
-// только слабым добавлением, а не решающим голосом.
-private const val WEIGHT_HOLES = 0.15
+private const val WEIGHT_FILL = 1.5
 
 /** Типичное расстояние до "плохого" совпадения — калибровано по разбросу самих эталонов. */
 private const val DISTANCE_SCALE = 0.6
 
 private fun featureDistance(features: ShapeFeatures, prototype: Prototype): Double {
     val dHeight = features.heightFrac - prototype.height
-    val dAspect = features.aspect - prototype.aspect
+    val dWidth = features.widthFrac - prototype.width
     val dTop = features.topFrac - prototype.top
     val dMid = features.midFrac - prototype.mid
     val dBot = features.botFrac - prototype.bot
     val dSymmetry = features.symmetry - prototype.symmetry
     val dFill = features.fill - prototype.fill
-    val dHoles = features.holesNorm - prototype.holesNorm
     val sumSquares = WEIGHT_HEIGHT * dHeight * dHeight +
-        WEIGHT_ASPECT * dAspect * dAspect +
+        WEIGHT_WIDTH * dWidth * dWidth +
         WEIGHT_TOP * dTop * dTop +
         WEIGHT_MID * dMid * dMid +
         WEIGHT_BOT * dBot * dBot +
         WEIGHT_SYMMETRY * dSymmetry * dSymmetry +
-        WEIGHT_FILL * dFill * dFill +
-        WEIGHT_HOLES * dHoles * dHoles
+        WEIGHT_FILL * dFill * dFill
     return sqrt(sumSquares)
 }
 
@@ -932,6 +1216,32 @@ private fun featureDistance(features: ShapeFeatures, prototype: Prototype): Doub
  * второго места даёт высокую уверенность; слабое совпадение или два похожих
  * кандидата — низкую, даже если формально победитель есть.
  */
+/**
+ * Эталон одной фигуры в том же порядке признаков, что и [cellSignatures] —
+ * вход только для тестов, сверяющих рисованный набор с измеренным настоящим.
+ */
+internal fun prototypeSignature(piece: Char): DoubleArray? {
+    val type = when (piece.lowercaseChar()) {
+        'k' -> RecognizedPieceType.KING
+        'q' -> RecognizedPieceType.QUEEN
+        'r' -> RecognizedPieceType.ROOK
+        'b' -> RecognizedPieceType.BISHOP
+        'n' -> RecognizedPieceType.KNIGHT
+        'p' -> RecognizedPieceType.PAWN
+        else -> return null
+    }
+    val prototype = PROTOTYPES.first { it.type == type }
+    return doubleArrayOf(
+        prototype.height,
+        prototype.width,
+        prototype.top,
+        prototype.mid,
+        prototype.bot,
+        prototype.symmetry,
+        prototype.fill,
+    )
+}
+
 private fun classifyPieceType(features: ShapeFeatures): Pair<RecognizedPieceType, Double> {
     val ranked = PROTOTYPES.map { it.type to featureDistance(features, it) }.sortedBy { it.second }
     val best = ranked[0]
@@ -977,6 +1287,52 @@ private const val MIN_OCCUPIED_CONFIDENCE = 0.15
 // ---------------------------------------------------------------------------
 // Сборка FEN и проверка легальности через chesslib.
 // ---------------------------------------------------------------------------
+
+/** Разворот доски на пол-оборота: клетка (row, col) уходит в (7-row, 7-col). */
+private fun <T> turnAround(cells: List<T>): List<T> = List(64) { index ->
+    cells[63 - index]
+}
+
+/**
+ * Снята ли доска со стороны чёрных.
+ *
+ * Прямого признака на картинке нет: развернув доску на пол-оборота, получаем
+ * такую же законную позицию, и правило "пешка не стоит на крайнем ряду" здесь
+ * не помогает — разворот переводит первый ряд в восьмой и обратно, то есть
+ * нарушает это правило в обеих ориентациях сразу или ни в одной.
+ *
+ * Остаётся расположение армий: свои фигуры в среднем стоят ближе к своему краю
+ * доски. Признак не абсолютный — бывают позиции с глубоко зашедшим белым
+ * войском, — поэтому результат не прячется, а возвращается наружу
+ * ([RecognitionResult.Recognized.turnedAround]), и у человека остаётся кнопка
+ * "перевернуть".
+ */
+private fun looksTurnedAround(cells: List<Char?>): Boolean {
+    var whiteRows = 0
+    var whiteCount = 0
+    var blackRows = 0
+    var blackCount = 0
+
+    for (index in 0 until 64) {
+        val piece = cells[index] ?: continue
+        val row = index / 8
+        if (piece.isUpperCase()) {
+            whiteRows += row
+            whiteCount++
+        } else {
+            blackRows += row
+            blackCount++
+        }
+    }
+
+    if (whiteCount == 0 || blackCount == 0) return false
+
+    // Строки нумеруются сверху вниз, поэтому у нормально ориентированной доски
+    // средняя строка белых больше средней строки чёрных.
+    val whiteMean = whiteRows.toDouble() / whiteCount
+    val blackMean = blackRows.toDouble() / blackCount
+    return whiteMean < blackMean
+}
 
 private fun buildPlacement(cells: List<Char?>): String {
     val result = StringBuilder()

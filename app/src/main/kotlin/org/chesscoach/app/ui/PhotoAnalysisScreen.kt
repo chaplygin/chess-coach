@@ -55,8 +55,15 @@ import org.chesscoach.core.vision.PhotoSource
 import org.chesscoach.core.vision.RecognitionResult
 import org.chesscoach.engine.SearchLimits
 
-/** Сторона снимка, длиннее которой мы не пускаем в распознавание. */
-private const val MAX_PHOTO_SIDE = 1024
+/**
+ * Сторона снимка, длиннее которой мы не пускаем в распознавание.
+ *
+ * Считать по всем мегапикселям незачем, но и ужимать сильно нельзя: скриншот
+ * телефона вытянутый, доска занимает от силы половину его высоты, и после
+ * уменьшения длинной стороны до тысячи пикселей на клетку остаётся полсотни —
+ * по такой клетке силуэт фигуры уже не разобрать.
+ */
+private const val MAX_PHOTO_SIDE = 1800
 
 private data class PhotoPositionAdvice(val scoreFromWhite: Score, val bestMoveSan: String, val depth: Int)
 
@@ -82,6 +89,7 @@ fun PhotoAnalysisScreen(container: AppContainer, onBack: () -> Unit) {
     var loadingPhoto by remember { mutableStateOf(false) }
     var recognition by remember { mutableStateOf<RecognitionResult?>(null) }
     var recognizing by remember { mutableStateOf(false) }
+    var turnedByHand by remember { mutableStateOf(false) }
 
     fun handleBitmap(bitmap: Bitmap) {
         loadError = null
@@ -146,22 +154,28 @@ fun PhotoAnalysisScreen(container: AppContainer, onBack: () -> Unit) {
             return@LaunchedEffect
         }
         recognizing = true
+        turnedByHand = false
         recognition = withContext(Dispatchers.Default) { BoardRecognizer.recognize(image, whiteToMove, source) }
         recognizing = false
     }
 
-    val recognizedFen = (recognition as? RecognitionResult.Recognized)?.fen
+    val recognized = recognition as? RecognitionResult.Recognized
+    // Ориентация — единственное, что не следует из самого снимка: развёрнутая на
+    // пол-оборота доска даёт такую же законную позицию. Распознаватель выбирает
+    // сторону по расположению армий и честно сообщает о выборе, а последнее
+    // слово оставлено человеку.
+    val shownFen = recognized?.fen?.let { if (turnedByHand) BoardRecognizer.turnedAround(it) else it }
 
     var advice by remember { mutableStateOf<PhotoPositionAdvice?>(null) }
     var explanation by remember { mutableStateOf<PositionExplanation?>(null) }
     var analyzing by remember { mutableStateOf(false) }
     var engineError by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(recognizedFen) {
+    LaunchedEffect(shownFen) {
         advice = null
         explanation = null
         engineError = null
-        val fen = recognizedFen ?: return@LaunchedEffect
+        val fen = shownFen ?: return@LaunchedEffect
 
         analyzing = true
         container.engine.analyzer()
@@ -245,9 +259,13 @@ fun PhotoAnalysisScreen(container: AppContainer, onBack: () -> Unit) {
 
                 is RecognitionResult.Recognized -> {
                     CheckPositionBanner()
-                    ChessBoard(fen = result.fen, arrows = arrows)
+                    ChessBoard(fen = shownFen ?: result.fen, arrows = arrows)
+                    OrientationRow(
+                        turnedAutomatically = result.turnedAround != turnedByHand,
+                        onTurn = { turnedByHand = !turnedByHand },
+                    )
                     PositionAnalysisCard(
-                        fen = result.fen,
+                        fen = shownFen ?: result.fen,
                         advice = advice,
                         coachText = coachText,
                         analyzing = analyzing,
@@ -356,6 +374,32 @@ private fun CheckPositionBanner() {
             modifier = Modifier.padding(12.dp),
             style = MaterialTheme.typography.bodySmall,
         )
+    }
+}
+
+/**
+ * Сторона, с которой снята доска, и кнопка её перевернуть.
+ *
+ * Развернув доску на пол-оборота, получаем такую же законную позицию, поэтому
+ * по одному снимку сторону определить нельзя — распознаватель выбирает её по
+ * тому, чьи фигуры стоят ближе к нижнему краю. Признак хороший, но не
+ * безошибочный, и молча ошибиться тут значит разобрать зеркальную позицию с
+ * уверенным видом.
+ */
+@Composable
+private fun OrientationRow(turnedAutomatically: Boolean, onTurn: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            if (turnedAutomatically) "Снято со стороны чёрных — доска развёрнута." else "Снято со стороны белых.",
+            style = MaterialTheme.typography.bodySmall,
+            color = Color(0xFF5F6368),
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = onTurn) { Text("Перевернуть") }
     }
 }
 

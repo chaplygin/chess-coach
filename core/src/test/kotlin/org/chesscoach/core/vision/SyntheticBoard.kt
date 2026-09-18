@@ -1,47 +1,90 @@
 package org.chesscoach.core.vision
 
-import java.awt.BasicStroke
 import java.awt.Color
 import java.awt.RenderingHints
 import java.awt.Shape
 import java.awt.geom.Area
-import java.awt.geom.Ellipse2D
 import java.awt.geom.Path2D
-import java.awt.geom.Rectangle2D
 import java.awt.image.BufferedImage
 import org.chesscoach.core.BoardLayout
 
 /**
  * Рисование синтетической доски — общее для всех тестов распознавания.
  *
- * Фигуры рисуются своими силуэтами, а не символами шрифта. Причина найдена
- * сборкой: на сборочной машине в системном шрифте шахматных символов нет
- * вовсе, и доска получалась из одинаковых пустых прямоугольников — тест мерил
- * что угодно, кроме распознавания фигур. Свои силуэты одинаковы на любой
- * машине, и калибровка эталонов перестаёт зависеть от того, какие шрифты
- * стоят в системе.
+ * Фигуры заданы вертикальным профилем: по высоте силуэта выписаны полуширины,
+ * и из них собирается симметричный контур. Числа профилей подобраны так, чтобы
+ * повторить пропорции настоящего набора Lichess, измеренные на присланном
+ * скриншоте (core/src/test/resources/vision/lichess-screenshot.png): рост от
+ * низа клетки, ширина, ширина в верхней, средней и нижней трети, доля
+ * заполнения рамки.
  *
- * Пропорции взяты как у обычного клубного набора: пешка самая низкая, за ней
- * ладья и конь, выше слон и ферзь, самый высокий король. Именно на разнице в
- * росте держится различение пешки и слона.
+ * Так сделано после дорогой ошибки. Раньше силуэты рисовались "на глаз", и на
+ * них же измерялись эталоны распознавания: получалась замкнутая система, где
+ * код проверялся на картинках, нарисованных под него. На первом же настоящем
+ * скриншоте всё посыпалось — у выдуманного набора пешка была вдвое ниже
+ * короля, а у настоящего они почти одного роста, и все фигуры прочитались как
+ * короли и ферзи. Теперь эталоны берутся с настоящего снимка, а этот
+ * рисовальщик обязан им соответствовать — за этим следит SyntheticSetTest.
  *
- * Рисовальщик один на калибровку и на замер точности: как только их станет
- * два, эталоны будут описывать одни картинки, а проверяться на других — ровно
- * эта ошибка уже стоила путаницы ферзя с королём.
+ * Фигуры стоят на своей клетке, то есть прижаты к её низу, а не висят по
+ * центру: и на экране, и на фотографии основание фигуры находится внизу
+ * клетки, а различаются фигуры макушкой.
  */
 object SyntheticBoard {
 
     private val lightColor = Color(0xED, 0xD6, 0xB0)
     private val darkColor = Color(0xB5, 0x88, 0x63)
 
-    /**
-     * Высота фигуры в долях клетки. Самая высокая укладывается внутри клетки
-     * с запасом: распознаватель берёт клетку с отступом в 10% от края, и фигура
-     * крупнее обрезалась бы по этой рамке — король с ферзём стали бы одного роста.
-     * В шахматных диаграммах и на экранах фигуры так и рисуют — внутри своей клетки.
-     */
+    /** Рост фигуры от низа клетки, в долях высоты клетки. */
     private val pieceHeight = mapOf(
-        'k' to 0.76, 'q' to 0.70, 'b' to 0.64, 'n' to 0.58, 'r' to 0.54, 'p' to 0.44,
+        'k' to 0.97, 'q' to 0.985, 'b' to 0.985, 'n' to 0.93, 'r' to 0.90, 'p' to 0.90,
+    )
+
+    /** Ширина фигуры в долях ширины клетки. */
+    private val pieceWidth = mapOf(
+        'k' to 0.822, 'q' to 0.920, 'b' to 0.870, 'n' to 0.760, 'r' to 0.685, 'p' to 0.590,
+    )
+
+    /**
+     * Вертикальный профиль: (доля высоты сверху вниз, полуширина в долях
+     * ширины фигуры). Полуширина 0.5 — фигура во всю свою ширину.
+     */
+    private val profiles = mapOf(
+        // Пешка: круглая голова, узкая шейка, широкое основание.
+        'p' to listOf(
+            0.00 to 0.03, 0.08 to 0.24, 0.15 to 0.275, 0.24 to 0.25,
+            0.32 to 0.15, 0.44 to 0.16, 0.58 to 0.30, 0.66 to 0.374,
+            0.82 to 0.42, 0.93 to 0.45, 0.96 to 0.50, 1.00 to 0.50,
+        ),
+        // Ладья: широкие зубцы сверху, ровный корпус, широкое основание.
+        'r' to listOf(
+            0.00 to 0.43, 0.16 to 0.43, 0.22 to 0.35, 0.34 to 0.33,
+            0.66 to 0.33, 0.74 to 0.38, 0.86 to 0.43, 0.92 to 0.50, 1.00 to 0.50,
+        ),
+        // Слон: узкая митра на высокой ножке и очень широкое основание.
+        'b' to listOf(
+            0.00 to 0.04, 0.08 to 0.16, 0.18 to 0.234, 0.28 to 0.20,
+            0.36 to 0.12, 0.50 to 0.13, 0.62 to 0.267, 0.70 to 0.22,
+            0.80 to 0.26, 0.90 to 0.40, 0.95 to 0.50, 1.00 to 0.50,
+        ),
+        // Король: крест на макушке, широкие "плечи" посередине, основание уже них.
+        'k' to listOf(
+            0.00 to 0.05, 0.09 to 0.05, 0.10 to 0.17, 0.15 to 0.17,
+            0.16 to 0.05, 0.22 to 0.06, 0.26 to 0.40, 0.33 to 0.36,
+            0.45 to 0.46, 0.55 to 0.50, 0.66 to 0.45, 0.72 to 0.34,
+            0.86 to 0.30, 0.92 to 0.39, 1.00 to 0.39,
+        ),
+        // Ферзь: корона из зубцов поверху, узкая талия, основание уже короны.
+        'q' to listOf(
+            0.00 to 0.50, 0.10 to 0.50, 0.20 to 0.44, 0.30 to 0.44,
+            0.40 to 0.42, 0.50 to 0.28, 0.62 to 0.30, 0.74 to 0.33,
+            0.86 to 0.29, 0.93 to 0.35, 1.00 to 0.35,
+        ),
+        // Конь рисуется отдельно: он единственный несимметричный.
+        'n' to listOf(
+            0.00 to 0.35, 0.20 to 0.39, 0.40 to 0.39, 0.60 to 0.36,
+            0.80 to 0.42, 0.90 to 0.47, 1.00 to 0.475,
+        ),
     )
 
     fun render(placementFen: String, boardPixels: Int = 480): GrayImage {
@@ -63,9 +106,9 @@ object SyntheticBoard {
                 val piece = placement[row * 8 + col] ?: continue
                 val kind = piece.lowercaseChar()
                 val height = cellSize * pieceHeight.getValue(kind)
-                val width = height * 0.72
+                val width = cellSize * pieceWidth.getValue(kind)
                 val x = col * cellSize + (cellSize - width) / 2
-                val y = row * cellSize + (cellSize - height) / 2
+                val y = (row + 1) * cellSize - height
                 // Настоящая белая фигура на фотографии — такой же сплошной
                 // силуэт, как чёрная, просто светлее фона, а не полый контур.
                 g.color = if (piece.isUpperCase()) Color.WHITE else Color.BLACK
@@ -83,131 +126,80 @@ object SyntheticBoard {
         return GrayImage(boardPixels, boardPixels, pixels)
     }
 
-    private fun silhouette(kind: Char, x: Double, y: Double, w: Double, h: Double): Shape = when (kind) {
-        'p' -> pawn(x, y, w, h)
-        'b' -> bishop(x, y, w, h)
-        'n' -> knight(x, y, w, h)
-        'r' -> rook(x, y, w, h)
-        'q' -> queen(x, y, w, h)
-        else -> king(x, y, w, h)
-    }
+    /**
+     * Вырезы, идущие от макушки вниз: (смещение центра от оси, полуширина,
+     * глубина) — всё в долях размера фигуры.
+     *
+     * Ими держится "воздух" внутри рамки силуэта: у настоящего ферзя корона
+     * состоит из отдельных зубцов, и просветы между ними занимают заметную
+     * часть верхней трети. Без вырезов нарисованный ферзь получался сплошным
+     * пятном и по заполнению рамки становился похож на ладью.
+     */
+    private val notches = mapOf(
+        'q' to listOf(
+            -0.34 to 0.05, -0.12 to 0.05, 0.12 to 0.05, 0.34 to 0.05,
+        ),
+    )
 
-    /** Общее для всех фигур основание: широкая устойчивая подставка. */
-    private fun base(x: Double, y: Double, w: Double, h: Double): Path2D.Double {
-        val path = Path2D.Double()
-        path.moveTo(x, y + h)
-        path.lineTo(x + w, y + h)
-        path.lineTo(x + w * 0.82, y + h * 0.88)
-        path.lineTo(x + w * 0.18, y + h * 0.88)
-        path.closePath()
-        return path
-    }
+    private const val NOTCH_DEPTH = 0.34
 
-    private fun pawn(x: Double, y: Double, w: Double, h: Double): Shape {
-        val area = Area(base(x, y, w, h))
-        area.add(Area(Ellipse2D.Double(x + w * 0.28, y, w * 0.44, h * 0.4)))
-        val body = Path2D.Double()
-        body.moveTo(x + w * 0.38, y + h * 0.3)
-        body.lineTo(x + w * 0.62, y + h * 0.3)
-        body.lineTo(x + w * 0.78, y + h * 0.9)
-        body.lineTo(x + w * 0.22, y + h * 0.9)
-        body.closePath()
-        area.add(Area(body))
-        return area
-    }
+    private fun silhouette(kind: Char, x: Double, y: Double, w: Double, h: Double): Shape {
+        val profile = profiles.getValue(kind)
+        val body = if (kind == 'n') knight(profile, x, y, w, h) else symmetric(profile, x, y, w, h)
+        val cuts = notches[kind] ?: return body
 
-    private fun bishop(x: Double, y: Double, w: Double, h: Double): Shape {
-        val area = Area(base(x, y, w, h))
-        val body = Path2D.Double()
-        body.moveTo(x + w * 0.5, y)
-        body.lineTo(x + w * 0.74, y + h * 0.36)
-        body.lineTo(x + w * 0.66, y + h * 0.52)
-        body.lineTo(x + w * 0.8, y + h * 0.9)
-        body.lineTo(x + w * 0.2, y + h * 0.9)
-        body.lineTo(x + w * 0.34, y + h * 0.52)
-        body.lineTo(x + w * 0.26, y + h * 0.36)
-        body.closePath()
-        area.add(Area(body))
-        // Прорезь митры — деталь, из-за которой силуэт слона это не просто
-        // высокая пешка.
-        val slit = Path2D.Double()
-        slit.moveTo(x + w * 0.46, y + h * 0.14)
-        slit.lineTo(x + w * 0.62, y + h * 0.34)
-        slit.lineTo(x + w * 0.54, y + h * 0.38)
-        slit.lineTo(x + w * 0.38, y + h * 0.18)
-        slit.closePath()
-        area.subtract(Area(slit))
-        return area
-    }
-
-    private fun knight(x: Double, y: Double, w: Double, h: Double): Shape {
-        val area = Area(base(x, y, w, h))
-        val head = Path2D.Double()
-        head.moveTo(x + w * 0.22, y + h * 0.9)
-        head.lineTo(x + w * 0.3, y + h * 0.42)
-        head.lineTo(x + w * 0.12, y + h * 0.3)
-        head.lineTo(x + w * 0.34, y + h * 0.06)
-        head.lineTo(x + w * 0.52, y)
-        head.lineTo(x + w * 0.86, y + h * 0.24)
-        head.lineTo(x + w * 0.8, y + h * 0.9)
-        head.closePath()
-        area.add(Area(head))
-        return area
-    }
-
-    private fun rook(x: Double, y: Double, w: Double, h: Double): Shape {
-        val area = Area(base(x, y, w, h))
-        val body = Path2D.Double()
-        body.moveTo(x + w * 0.24, y + h * 0.22)
-        body.lineTo(x + w * 0.76, y + h * 0.22)
-        body.lineTo(x + w * 0.82, y + h * 0.9)
-        body.lineTo(x + w * 0.18, y + h * 0.9)
-        body.closePath()
-        area.add(Area(body))
-        area.add(Area(Rectangle2D.Double(x + w * 0.12, y, w * 0.76, h * 0.22)))
-        // Зубцы: два выреза сверху — то, по чему ладью узнают с первого взгляда.
-        area.subtract(Area(Rectangle2D.Double(x + w * 0.3, y - 1, w * 0.14, h * 0.13)))
-        area.subtract(Area(Rectangle2D.Double(x + w * 0.56, y - 1, w * 0.14, h * 0.13)))
-        return area
-    }
-
-    private fun queen(x: Double, y: Double, w: Double, h: Double): Shape {
-        val area = Area(base(x, y, w, h))
-        val body = Path2D.Double()
-        body.moveTo(x + w * 0.5, y + h * 0.1)
-        body.lineTo(x + w * 0.72, y + h * 0.3)
-        body.lineTo(x + w * 0.82, y + h * 0.9)
-        body.lineTo(x + w * 0.18, y + h * 0.9)
-        body.lineTo(x + w * 0.28, y + h * 0.3)
-        body.closePath()
-        area.add(Area(body))
-        // Корона из трёх зубцов с просветами между ними.
-        for (offset in listOf(0.14, 0.43, 0.72)) {
-            area.add(Area(Ellipse2D.Double(x + w * offset, y, w * 0.14, h * 0.16)))
+        val area = Area(body)
+        for ((offset, half) in cuts) {
+            val cx = x + w / 2 + offset * w
+            val cut = Path2D.Double()
+            cut.moveTo(cx - half * w, y - h * 0.02)
+            cut.lineTo(cx + half * w, y - h * 0.02)
+            cut.lineTo(cx + half * w * 0.4, y + NOTCH_DEPTH * h)
+            cut.lineTo(cx - half * w * 0.4, y + NOTCH_DEPTH * h)
+            cut.closePath()
+            area.subtract(Area(cut))
         }
         return area
     }
 
-    private fun king(x: Double, y: Double, w: Double, h: Double): Shape {
-        val area = Area(base(x, y, w, h))
-        val body = Path2D.Double()
-        body.moveTo(x + w * 0.5, y + h * 0.18)
-        body.lineTo(x + w * 0.74, y + h * 0.36)
-        body.lineTo(x + w * 0.84, y + h * 0.9)
-        body.lineTo(x + w * 0.16, y + h * 0.9)
-        body.lineTo(x + w * 0.26, y + h * 0.36)
-        body.closePath()
-        area.add(Area(body))
-        // Крест на макушке: узкая вершина поверх самого высокого силуэта.
-        val stroke = BasicStroke((w * 0.12).toFloat())
-        val vertical = Path2D.Double()
-        vertical.moveTo(x + w * 0.5, y)
-        vertical.lineTo(x + w * 0.5, y + h * 0.22)
-        area.add(Area(stroke.createStrokedShape(vertical)))
-        val horizontal = Path2D.Double()
-        horizontal.moveTo(x + w * 0.34, y + h * 0.09)
-        horizontal.lineTo(x + w * 0.66, y + h * 0.09)
-        area.add(Area(stroke.createStrokedShape(horizontal)))
-        return area
+    /** Симметричный силуэт: профиль отражается относительно вертикальной оси. */
+    private fun symmetric(
+        profile: List<Pair<Double, Double>>,
+        x: Double,
+        y: Double,
+        w: Double,
+        h: Double,
+    ): Shape {
+        val path = Path2D.Double()
+        val center = x + w / 2
+        path.moveTo(center - profile.first().second * w, y + profile.first().first * h)
+        for ((ty, half) in profile) path.lineTo(center - half * w, y + ty * h)
+        for ((ty, half) in profile.reversed()) path.lineTo(center + half * w, y + ty * h)
+        path.closePath()
+        return Area(path)
+    }
+
+    /**
+     * Конь: тот же профиль, но верхняя половина сдвинута вбок.
+     *
+     * Асимметрия здесь не украшение, а единственный признак, по которому конь
+     * отличим от любой другой фигуры в любом наборе: он один смотрит вбок.
+     */
+    private fun knight(
+        profile: List<Pair<Double, Double>>,
+        x: Double,
+        y: Double,
+        w: Double,
+        h: Double,
+    ): Shape {
+        val path = Path2D.Double()
+        val center = x + w / 2
+        fun shift(ty: Double) = if (ty < 0.55) w * 0.16 * (0.55 - ty) / 0.55 else 0.0
+
+        path.moveTo(center - profile.first().second * w + shift(profile.first().first), y)
+        for ((ty, half) in profile) path.lineTo(center - half * w + shift(ty), y + ty * h)
+        for ((ty, half) in profile.reversed()) path.lineTo(center + half * w + shift(ty) * 2.0, y + ty * h)
+        path.closePath()
+        return Area(path)
     }
 }
