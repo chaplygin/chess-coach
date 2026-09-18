@@ -71,7 +71,7 @@ object BoardRecognizer {
         whiteToMove: Boolean,
         source: PhotoSource = PhotoSource.SCREEN,
     ): RecognitionResult {
-        val raw = readAllCells(image)
+        val raw = readAllCells(image, source)
             ?: return RecognitionResult.NoBoardFound(boardNotFoundAdvice(source))
 
         val unreadable = mutableListOf<String>()
@@ -221,9 +221,53 @@ private fun readBoard(image: GrayImage, region: BoardRegion): List<ScannedCell> 
     }
 }
 
-/** null, если квадрат доски вообще не нашёлся (см. [findBoardRegion]). */
-internal fun readAllCells(image: GrayImage): RawCellReadings? {
+/**
+ * Чтение всех 64 клеток. null, если доску на снимке найти не удалось.
+ *
+ * Два способа найти доску, и порядок зависит от того, что снимали. Осевой
+ * поиск ищет ровный квадрат и на скриншоте отрабатывает точно и мгновенно.
+ * Поиск по сетке прямых выпрямляет доску, снятую под углом, но стоит дороже
+ * (десятки миллисекунд) и на идеально ровной картинке не даёт ничего сверх
+ * осевого. Поэтому для снимка с экрана сначала пробуется осевой, а для
+ * фотографии доски — сразу выпрямление.
+ *
+ * Оба способа остаются запасными друг для друга: фотография экрана бывает
+ * почти ровной, а скриншот — обрезанным криво.
+ */
+internal fun readAllCells(image: GrayImage, source: PhotoSource = PhotoSource.SCREEN): RawCellReadings? {
+    val order = when (source) {
+        PhotoSource.SCREEN -> listOf(::readAxisAligned, ::readWarped)
+        PhotoSource.BOARD -> listOf(::readWarped, ::readAxisAligned)
+    }
+    for (attempt in order) {
+        val result = attempt(image)
+        if (result != null) return result
+    }
+    return null
+}
+
+/** Доска как ровный квадрат прямо в кадре — случай скриншота. */
+private fun readAxisAligned(image: GrayImage): RawCellReadings? {
     val region = findBoardRegion(image) ?: return null
+    return readCells(image, region)
+}
+
+/**
+ * Доска, снятая под углом: сначала находим её четырёхугольник и выпрямляем, а
+ * дальше читаем ровно так же, как ровную.
+ *
+ * Выпрямленную доску всё равно прогоняем через осевой поиск, а не считаем, что
+ * она занимает кадр ровно: так проверка чередования клеток делается ещё раз
+ * уже на выпрямленной картинке, и неверно найденный четырёхугольник отсеется
+ * здесь, а не превратится в уверенно показанную чужую позицию.
+ */
+private fun readWarped(image: GrayImage): RawCellReadings? {
+    val located = BoardGeometry.locateBoard(image) ?: return null
+    val region = findBoardRegion(located.image) ?: return null
+    return readCells(located.image, region)
+}
+
+private fun readCells(image: GrayImage, region: BoardRegion): RawCellReadings? {
     val scanned = readBoard(image, region)
     val colors = colorSplit(scanned)
 
