@@ -44,6 +44,7 @@ private const val SITE_URL = "https://chaplygin.github.io/chess-coach/"
 fun SettingsScreen(
     container: AppContainer,
     onBack: () -> Unit,
+    onOpenEngineCheck: () -> Unit,
     onSignedOut: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -119,6 +120,8 @@ fun SettingsScreen(
                         settingsSaved = true
                     },
                 ) { Text("Сохранить") }
+
+                TextButton(onClick = onOpenEngineCheck) { Text("Проверка движка") }
 
                 if (settingsSaved) {
                     Text(

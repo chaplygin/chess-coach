@@ -63,7 +63,6 @@ fun AppRoot(redirect: Uri?, onRedirectHandled: () -> Unit) {
             onOpenGames = { screen = Screen.GAMES },
             onOpenPhoto = { screen = Screen.PHOTO },
             onOpenLiveGame = { screen = Screen.LIVE },
-            onOpenEngineCheck = { screen = Screen.ENGINE },
             onOpenSettings = { screen = Screen.SETTINGS },
             onSignOut = {
                 container.tokenStore.signOut()
@@ -101,7 +100,7 @@ fun AppRoot(redirect: Uri?, onRedirectHandled: () -> Unit) {
         Screen.ENGINE -> EngineScreen(
             container = container,
             onBack = {
-                screen = if (container.tokenStore.isSignedIn()) Screen.MENU else Screen.LOGIN
+                screen = if (container.tokenStore.isSignedIn()) Screen.SETTINGS else Screen.LOGIN
             },
         )
 
@@ -113,6 +112,7 @@ fun AppRoot(redirect: Uri?, onRedirectHandled: () -> Unit) {
         Screen.SETTINGS -> SettingsScreen(
             container = container,
             onBack = { screen = Screen.MENU },
+            onOpenEngineCheck = { screen = Screen.ENGINE },
             onSignedOut = { screen = Screen.LOGIN },
         )
     }

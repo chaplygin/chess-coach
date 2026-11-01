@@ -24,8 +24,8 @@ import org.chesscoach.app.AppContainer
  *
  * Крупные кнопки, а не список пунктов: приложением пользуются с телефона и
  * часто одной рукой, и три главных действия должны попадаться пальцу без
- * прицеливания. Редкое и служебное (настройки, проверка движка, выход) уходит
- * вниз мелкой строкой — иначе главное тонет среди второстепенного.
+ * прицеливания. Редкое и служебное (настройки, выход) уходит вниз мелкой
+ * строкой — иначе главное тонет среди второстепенного.
  */
 @Composable
 fun MainMenuScreen(
@@ -33,7 +33,6 @@ fun MainMenuScreen(
     onOpenGames: () -> Unit,
     onOpenPhoto: () -> Unit,
     onOpenLiveGame: () -> Unit,
-    onOpenEngineCheck: () -> Unit,
     onOpenSettings: () -> Unit,
     onSignOut: () -> Unit,
 ) {
@@ -76,7 +75,6 @@ fun MainMenuScreen(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             TextButton(onClick = onOpenSettings) { Text("Настройки") }
-            TextButton(onClick = onOpenEngineCheck) { Text("Движок") }
             TextButton(onClick = onSignOut) { Text("Выйти") }
         }
     }
