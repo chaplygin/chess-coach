@@ -13,15 +13,38 @@ android {
         applicationId = "org.chesscoach.app"
         minSdk = 31
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1-M0"
+        // Номер сборки CI: растёт сам, и по нему приложение сравнивает себя с
+        // последним релизом на GitHub. Локальная сборка считается самой старой.
+        val buildNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+        versionCode = buildNumber
+        versionName = "0.2.$buildNumber"
 
         // Телефон пользователя — arm64. Одна ABI держит APK минимальным,
         // а бинарник Stockfish (~76 МБ) добавится сюда же в M1.
         ndk { abiFilters += "arm64-v8a" }
     }
 
+    // Android ставит обновление только поверх той же подписи. Отладочный ключ у
+    // каждого раннера CI свой, поэтому без постоянного ключа каждая сборка
+    // требовала бы удалить приложение вместе со входом и кэшем разборов.
+    val keystorePath = System.getenv("SIGNING_KEYSTORE_PATH")
+    val keystorePassword = System.getenv("SIGNING_PASSWORD")
+    val fixedSigning = if (keystorePath != null && keystorePassword != null) {
+        signingConfigs.create("fixed") {
+            storeFile = file(keystorePath)
+            storePassword = keystorePassword
+            keyAlias = "chesscoach"
+            keyPassword = keystorePassword
+            storeType = "pkcs12"
+        }
+    } else {
+        null
+    }
+
     buildTypes {
+        debug {
+            fixedSigning?.let { signingConfig = it }
+        }
         release {
             isMinifyEnabled = false
         }

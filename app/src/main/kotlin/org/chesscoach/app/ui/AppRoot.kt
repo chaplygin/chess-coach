@@ -46,6 +46,10 @@ fun AppRoot(redirect: Uri?, onRedirectHandled: () -> Unit) {
         onRedirectHandled()
     }
 
+    // Сам апдейтер помнит, что уже проверял: поворот экрана не повторит запрос.
+    LaunchedEffect(Unit) { container.updater.checkOnStartup() }
+    UpdateDialog(container.updater)
+
     when (screen) {
         Screen.LOGIN -> LoginScreen(
             container = container,

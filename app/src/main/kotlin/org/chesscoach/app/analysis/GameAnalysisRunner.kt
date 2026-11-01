@@ -74,6 +74,6 @@ class GameAnalysisRunner(private val engine: EngineController) {
 
     private companion object {
         const val MOVETIME_MS = 700
-        const val MATED_CP = -100_000
+        const val MATED_CP = -GameAnalyzer.MATED_CP
     }
 }

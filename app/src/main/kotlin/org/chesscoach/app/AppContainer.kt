@@ -1,6 +1,7 @@
 package org.chesscoach.app
 
 import android.content.Context
+import org.chesscoach.app.update.AppUpdater
 import org.chesscoach.coach.CoachEngine
 import org.chesscoach.engine.EngineController
 import org.chesscoach.lichess.LichessApi
@@ -29,6 +30,9 @@ class AppContainer(context: Context) {
     val lichessApi: LichessApi get() = lichess.api
 
     val lichessOAuth: LichessOAuth get() = lichess.oauth
+
+    /** Один на приложение: диалог при запуске и кнопка в настройках видят одно состояние. */
+    val updater: AppUpdater by lazy { AppUpdater(applicationContext) }
 
     val engine: EngineController by lazy { EngineController(applicationContext) }
 

@@ -45,6 +45,17 @@ class GameAnalyzerTest {
     }
 
     @Test
+    fun `delivering the mate is not a missed mate`() {
+        val positions = listOf(ply(0, whiteMoved = true))
+        val scores = listOf(Score.Mate(1), Score.Cp(-GameAnalyzer.MATED_CP))
+
+        val result = GameAnalyzer.classify(positions, scores)
+
+        assertFalse(result[0].missedForcedMate)
+        assertEquals(MoveClassification.BEST, result[0].classification)
+    }
+
+    @Test
     fun `missed forced mate is a blunder regardless of centipawn loss`() {
         val positions = listOf(ply(0, whiteMoved = true))
         val scores = listOf(Score.Mate(3), Score.Cp(50))

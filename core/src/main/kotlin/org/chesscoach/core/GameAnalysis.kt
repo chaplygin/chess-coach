@@ -26,6 +26,9 @@ data class PlyEvaluation(
  */
 object GameAnalyzer {
 
+    /** Оценка позиции с матом для той стороны, которую заматовали, взятая по модулю. */
+    const val MATED_CP = 100_000
+
     /**
      * [positionScores] — оценка каждой позиции партии от лица стороны, чей в
      * ней ход (как её и отдаёт сам движок), в количестве на одну больше, чем
@@ -47,7 +50,10 @@ object GameAnalyzer {
 
             // Форсированный мат был доступен и после хода пропал — неважно,
             // насколько «дёшево» это выглядит в сантипешках.
-            val missedMate = before is Score.Mate && before.movesToMate > 0 &&
+            // Сам поставленный мат движок не оценивает: позиция без ходов приходит
+            // предельной оценкой в сантипешках, и пропажей мата она не считается.
+            val gaveMate = afterFromMoverView is Score.Cp && afterFromMoverView.centipawns >= MATED_CP
+            val missedMate = before is Score.Mate && before.movesToMate > 0 && !gaveMate &&
                 !(afterFromMoverView is Score.Mate && afterFromMoverView.movesToMate > 0)
 
             val sideAfterMove = if (ply.whiteMoved) Side.BLACK else Side.WHITE

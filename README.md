@@ -31,6 +31,19 @@ gh run download --name chesscoach-debug
 Движок Stockfish (~76 МБ) не хранится в репозитории: CI скачивает его из релиза
 `sf_19` и кладёт в `app/src/main/jniLibs/arm64-v8a/libstockfish.so`.
 
+## Обновления
+
+Каждая сборка `main` публикуется как релиз `build-N` с файлом `chesscoach.apk`.
+Приложение сравнивает свой `versionCode` с последним релизом при запуске и по кнопке
+в настройках. Подпись постоянная: ключ лежит в секретах `SIGNING_KEYSTORE_BASE64` и
+`SIGNING_PASSWORD`. Если потерять ключ, новые сборки не встанут поверх установленных.
+
+## Веб-версия
+
+https://chaplygin.github.io/chess-coach/ — разбор завершённых партий. Тот же код
+`:core` и `:coach`, переведённый в JavaScript (TeaVM), и Stockfish на WebAssembly.
+Собирается `tools/ci/build_site.sh` и выкладывается на GitHub Pages при сборке `main`.
+
 ## Требования к устройству
 
 Android 12+, arm64-v8a.

@@ -16,6 +16,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -27,6 +28,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import org.chesscoach.app.AppContainer
 import org.chesscoach.app.analysis.GameAnalysisStore
+import org.chesscoach.app.update.UpdateState
 import org.chesscoach.engine.EngineSettingsStore
 
 private const val HASH_STEP_MB = 16
@@ -53,13 +55,7 @@ fun SettingsScreen(
 
     var cacheCleared by remember { mutableStateOf(false) }
 
-    // Версия приложения читается из PackageManager, а не BuildConfig: так не
-    // нужно включать generateBuildConfig ради одного поля.
-    val appVersion = remember {
-        runCatching {
-            context.packageManager.getPackageInfo(context.packageName, 0).versionName
-        }.getOrNull() ?: "неизвестно"
-    }
+    val updateState by container.updater.state.collectAsState()
 
     LaunchedEffect(Unit) {
         container.engine.engineVersion()
@@ -132,7 +128,10 @@ fun SettingsScreen(
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Версии", style = MaterialTheme.typography.titleMedium)
-                Text("Приложение: $appVersion", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "Установленная версия: ${container.updater.installedVersionName}",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
                 Text(
                     "Stockfish: " + (
                         engineVersion
@@ -141,6 +140,14 @@ fun SettingsScreen(
                         ),
                     style = MaterialTheme.typography.bodyMedium,
                 )
+                OutlinedButton(
+                    enabled = updateState !is UpdateState.Checking && updateState !is UpdateState.Downloading,
+                    onClick = { container.updater.checkNow() },
+                ) { Text("Проверить обновление") }
+
+                settingsUpdateMessage(updateState)?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall)
+                }
             }
         }
 
@@ -187,6 +194,12 @@ fun SettingsScreen(
             }
         }
     }
+}
+
+private fun settingsUpdateMessage(state: UpdateState): String? = when (state) {
+    UpdateState.Checking -> "Проверяю…"
+    UpdateState.UpToDate -> "Установлена последняя версия."
+    else -> null
 }
 
 @Composable
