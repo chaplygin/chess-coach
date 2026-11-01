@@ -16,6 +16,11 @@ import org.junit.Test
  */
 class CoachReadingTest {
 
+    private companion object {
+        const val REAL_GAME_FEN = "r1bqk2r/ppp2ppp/2n2n2/b2pp3/3PPP2/P1N5/1PP1N1PP/R1BQKB1R w KQkq - 1 7"
+        const val REAL_GAME_MOVE = "c1e3"
+    }
+
     @Test
     fun `печатает разбор живых позиций`() {
         val binary = LocalStockfishClient.locate()
@@ -27,6 +32,10 @@ class CoachReadingTest {
         LocalStockfishClient(binary!!).use { engine ->
             val coach = CoachEngine(engine)
             runBlocking {
+                // Позиция из настоящей партии: на ней отрабатывался формат текста.
+                println("=".repeat(72))
+                println(coach.explainAsText(REAL_GAME_FEN, REAL_GAME_MOVE))
+
                 // По одной задаче на тему: смотреть шесть однотипных вилок
                 // бесполезно, а рентген и последняя горизонталь звучат иначе.
                 fixtures.distinctBy { it.theme }.forEach { fixture ->

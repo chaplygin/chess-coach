@@ -146,10 +146,14 @@ class AppUpdater(private val context: Context) {
         val connection = open(LATEST_RELEASE_URL)
         connection.setRequestProperty("Accept", "application/vnd.github+json")
         try {
+            // Репозиторий есть, а опубликованных версий ещё нет: это не сбой сети.
+            if (connection.responseCode == HttpURLConnection.HTTP_NOT_FOUND) {
+                throw IOException("на GitHub пока нет опубликованных версий")
+            }
             if (connection.responseCode != HttpURLConnection.HTTP_OK) {
                 throw IOException("GitHub ответил HTTP ${connection.responseCode}")
             }
-            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            val body =connection.inputStream.bufferedReader().use { it.readText() }
             val release = json.decodeFromString<ReleaseDto>(body)
 
             // Скачанные файлы весят больше 100 МБ: устаревшие убираем сразу.

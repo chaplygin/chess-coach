@@ -90,6 +90,7 @@ class ReasonDiffAnalyzer(
         val moveScoreFromMover = replyLine?.let { ScoreFormat.negate(it.score) }
 
         val newFacts = collectNewFacts(mover, featuresBefore, featuresAfterMove, featuresAfterReply)
+            .filterNot { answeredByReply(it, replyUci) }
         val prophylaxis = detectProphylaxis(fen, mainScore, fenAfterReply, moveScoreFromMover, mover)
 
         val reasonFacts = newFacts + listOfNotNull(prophylaxis)
@@ -105,6 +106,27 @@ class ReasonDiffAnalyzer(
             replyMoveSan = replyUci?.let { MoveNotation.uciToSanOrRaw(fenAfterMove, listOf(it)).first() },
             opponentGains = collectOpponentGains(mover, featuresBefore, featuresAfterMove),
         )
+    }
+
+    /**
+     * Соперник ходит следующим и может сразу снять удар: побить нападающую
+     * фигуру или увести цель. Такой выигрыш существует только на бумаге, и
+     * называть его причиной хода значило бы обещать ферзя, которого не будет.
+     */
+    private fun answeredByReply(fact: Fact, replyUci: String?): Boolean {
+        if (replyUci == null || replyUci.length < UCI_TARGET_END) return false
+        val from = replyUci.substring(0, UCI_SQUARE_LENGTH).uppercase()
+        val to = replyUci.substring(UCI_SQUARE_LENGTH, UCI_TARGET_END).uppercase()
+        return when (fact) {
+            is HangingPieceFact -> fact.firstAttacker?.value() == to || fact.square.value() == from
+            is ForkFact -> fact.from.value() == to
+            else -> false
+        }
+    }
+
+    private companion object {
+        const val UCI_SQUARE_LENGTH = 2
+        const val UCI_TARGET_END = 4
     }
 
     /**

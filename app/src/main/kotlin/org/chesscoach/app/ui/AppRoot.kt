@@ -55,7 +55,6 @@ fun AppRoot(redirect: Uri?, onRedirectHandled: () -> Unit) {
             container = container,
             completingLogin = completingLogin,
             errorMessage = authError,
-            onOpenEngineCheck = { screen = Screen.ENGINE },
         )
 
         Screen.MENU -> MainMenuScreen(
@@ -99,9 +98,7 @@ fun AppRoot(redirect: Uri?, onRedirectHandled: () -> Unit) {
 
         Screen.ENGINE -> EngineScreen(
             container = container,
-            onBack = {
-                screen = if (container.tokenStore.isSignedIn()) Screen.SETTINGS else Screen.LOGIN
-            },
+            onBack = { screen = Screen.SETTINGS },
         )
 
         Screen.LIVE -> LiveGameScreen(

@@ -89,6 +89,13 @@ data class AlternativeLine(
     val continuationSan: List<String>,
 )
 
+/** Ход, заметный уже при малой глубине расчёта и почти не уступающий лучшему. */
+data class HumanMove(
+    val lineSan: List<String>,
+    val lossVsBestCentipawns: Int,
+    val facts: List<Fact>,
+)
+
 /**
  * Разделы разбора. Раздел, для которого не хватило доказательств, просто
  * отсутствует в списке — пустых заголовков и фраз-заполнителей не бывает.
@@ -189,6 +196,15 @@ sealed interface Section {
         val pointIsInTheLine: Boolean = false,
         /** Ход спорит с дебютным правилом развития — это надо оговорить вслух. */
         val openingCaveat: OpeningCaveat? = null,
+    ) : Section
+
+    /**
+     * Два взгляда на лучший ход: самый сильный по движку и тот, что нашёл бы
+     * человек. [human] равен null, когда замены нет или она совпала с лучшим.
+     */
+    data class BestMoves(
+        val computerLineSan: List<String>,
+        val human: HumanMove? = null,
     ) : Section
 
     data class Prophylaxis(val fact: ProphylaxisFact) : Section

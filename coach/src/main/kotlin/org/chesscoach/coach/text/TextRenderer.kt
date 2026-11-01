@@ -12,6 +12,7 @@ import org.chesscoach.coach.model.DevelopmentFact
 import org.chesscoach.coach.model.DiscoveredAttackFact
 import org.chesscoach.coach.model.Evidence
 import org.chesscoach.coach.model.Fact
+import org.chesscoach.coach.model.GamePhase
 import org.chesscoach.coach.model.ForkFact
 import org.chesscoach.coach.model.HangingPieceFact
 import org.chesscoach.coach.model.KingSafetyFact
@@ -161,24 +162,86 @@ object TextRenderer {
     private fun header(explanation: PositionExplanation): String {
         val moveNumber = MoveNotation.fullMoveNumber(explanation.fen)
         val sideLabel = SideLexicon.name(explanation.sideToMove)
-        val scoreLabel = explanation.scoreFromWhite?.let { " Оценка ${ScoreFormat.display(it)}" } ?: ""
-        return "Ход $moveNumber, $sideLabel.$scoreLabel"
+        val played = explanation.section<Section.PlayedMove>()
+        val turning = played != null && isTurningPoint(explanation, played)
+
+        val title = listOfNotNull(
+            phaseLabel(explanation.featuresBefore.phase),
+            "Ход $moveNumber, $sideLabel",
+            "Ключевой момент".takeIf { turning },
+        ).joinToString(" · ")
+
+        return listOfNotNull(
+            title,
+            scoreLine(explanation, played),
+            played?.let(::summaryLine),
+        ).joinToString(System.lineSeparator())
     }
+
+    private fun phaseLabel(phase: GamePhase): String = when (phase) {
+        GamePhase.OPENING -> "Дебют"
+        GamePhase.MIDDLEGAME -> "Миттельшпиль"
+        GamePhase.ENDGAME -> "Эндшпиль"
+    }
+
+    /** Оценка до и после сыгранного хода. Числа всегда от лица белых, как в списке ходов. */
+    private fun scoreLine(explanation: PositionExplanation, played: Section.PlayedMove?): String? {
+        val before = explanation.scoreFromWhite ?: return null
+        if (played == null || played.matchesBest || played.centipawnLoss >= COLLAPSE_CP) {
+            return "Оценка ${ScoreFormat.display(before)}"
+        }
+        if (before !is Score.Cp) return "Оценка ${ScoreFormat.display(before)}"
+        val sign = if (explanation.sideToMove == Side.WHITE) -1 else 1
+        val after = Score.Cp(before.centipawns + sign * played.centipawnLoss)
+        return "Оценка до хода ${ScoreFormat.short(before)}, после хода ${ScoreFormat.short(after)}"
+    }
+
+    private fun summaryLine(section: Section.PlayedMove): String {
+        if (section.matchesBest) return "Коротко: сыгран лучший ход."
+        return "Коротко: " + SanRuFormatter.move(section.playedSan) + " — " +
+            classificationLabel(section.classification) + damageMark(section) +
+            ", лучше было " + SanRuFormatter.move(section.bestSan) + "."
+    }
+
+    /**
+     * Перелом: ход перевёл партию в другую зону оценки для того, кто его сделал,
+     * например из равной позиции в заметно худшую. Пороги «??» этим не меняются.
+     */
+    private fun isTurningPoint(explanation: PositionExplanation, played: Section.PlayedMove): Boolean {
+        val fromWhite = explanation.scoreFromWhite ?: return false
+        if (played.matchesBest || played.centipawnLoss < TURNING_POINT_LOSS_CP) return false
+        val fromMover = ScoreFormat.toWhitePerspective(fromWhite, explanation.sideToMove)
+        val before = when (fromMover) {
+            is Score.Cp -> fromMover.centipawns
+            is Score.Mate -> if (fromMover.movesToMate > 0) MATE_ZONE_CP else -MATE_ZONE_CP
+        }
+        return scoreZone(before) != scoreZone(before - played.centipawnLoss)
+    }
+
+    private fun scoreZone(centipawns: Int): Int = when {
+        centipawns > TURNING_POINT_LOSS_CP -> 1
+        centipawns < -TURNING_POINT_LOSS_CP -> -1
+        else -> 0
+    }
+
+    private const val TURNING_POINT_LOSS_CP = 100
+    private const val MATE_ZONE_CP = 10_000
 
     // ——— Заголовки и тела разделов ———
 
     private fun titleOf(section: Section, explanation: PositionExplanation): String = when (section) {
-        is Section.PositionAssessment -> "ОЦЕНКА ПОЗИЦИИ"
-        is Section.MyPosition -> "МОЯ ПОЗИЦИЯ"
-        is Section.MyAttack -> "МОЯ АТАКА"
+        is Section.PositionAssessment -> "ПОЗИЦИЯ"
+        is Section.MyPosition -> "ПЛАН СОПЕРНИКА"
+        is Section.MyAttack -> "МОЙ ПЛАН"
+        is Section.BestMoves -> "ЛУЧШИЙ ХОД"
         is Section.WhyThisMove ->
-            "ЛУЧШИЙ ХОД: ${SanRuFormatter.move(section.moveSan)}${playedMatchMark(explanation)}"
+            "ПОЧЕМУ ${SanRuFormatter.move(section.moveSan)}${playedMatchMark(explanation)}"
         is Section.PlayedMove ->
             "СЫГРАННЫЙ ХОД: ${SanRuFormatter.move(section.playedSan)} — " +
                 classificationLabel(section.classification) + damageMark(section)
         is Section.Prophylaxis -> "ПРОФИЛАКТИКА"
         is Section.Trap -> "ЕСЛИ СЫГРАТЬ ИНАЧЕ"
-        is Section.Alternatives -> "АЛЬТЕРНАТИВЫ"
+        is Section.Alternatives -> "ДРУГИЕ ХОДЫ"
     }
 
     /**
@@ -231,6 +294,7 @@ object TextRenderer {
         is Section.PositionAssessment -> positionAssessmentBody(section)
         is Section.MyPosition -> myPositionBody(section, pool, glossary, memory, forkedSquares)
         is Section.MyAttack -> myAttackBody(section, glossary, memory, forkedSquares)
+        is Section.BestMoves -> bestMovesBody(section, glossary, memory, forkedSquares)
         is Section.WhyThisMove -> whyThisMoveBody(section, glossary, memory, forkedSquares)
         is Section.PlayedMove -> playedMoveBody(section, explanation)
         is Section.Prophylaxis -> prophylaxisBody(section.fact, pool)
@@ -340,14 +404,16 @@ object TextRenderer {
         StrategicIdea.KEEP_IT_CLOSED -> "держать позицию закрытой"
     }
 
-    // ——— МОЯ ПОЗИЦИЯ / МОЯ АТАКА ———
+    // ——— ПЛАН СОПЕРНИКА / МОЙ ПЛАН ———
 
     /**
-     * Все пункты печатаются всегда, даже пустые.
+     * Один порядок проверки на обоих планах: маты, взятия, активные ходы.
      *
-     * "Мат: нет" — это ответ, а пропущенная строка выглядит так, будто тренер
-     * про мат забыл. Читателю нужен одинаковый список от позиции к позиции,
-     * иначе он не знает, что именно проверено, а что нет.
+     * Все пункты печатаются всегда, даже пустые. "Маты: нет" — это ответ, а
+     * пропущенная строка выглядит так, будто тренер про мат забыл.
+     *
+     * Угроза встаёт в тот пункт, к которому относится ход соперника, а король и
+     * план соперника идут в активные ходы.
      */
     private fun myPositionBody(
         section: Section.MyPosition,
@@ -355,32 +421,41 @@ object TextRenderer {
         glossary: Glossary,
         memory: RenderMemory,
         forkedSquares: Set<Square>,
-    ): String = listOf(
-        labelledLine("Безопасность короля", section.kingSafety, forkedSquares, glossary, memory),
-        labelledLine("Защита от взятий", section.loosePieces, forkedSquares, glossary, memory),
-        threatLine(section.threat, pool, glossary, memory, forkedSquares),
-        planLine("План соперника", section.opponentPlan, glossary, forkedSquares, forOpponent = true),
-    ).joinToString(System.lineSeparator())
+    ): String {
+        val threat = section.threat
+        val threatSentences = threatSentences(threat, pool, glossary, memory, forkedSquares)
+        val threatIsMate = threat?.evidence?.engineLine?.score is Score.Mate
+        val threatIsCapture = !threatIsMate && threat?.opponentMoveSan?.contains('x') == true
+
+        val (backRank, loose) = section.loosePieces.partition { it is BackRankFact }
+        return checkList(
+            mates = statementsFor(backRank, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON) +
+                threatSentences.takeIf { threatIsMate }.orEmpty(),
+            captures = statementsFor(loose, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON) +
+                threatSentences.takeIf { threatIsCapture }.orEmpty(),
+            active = threatSentences.takeUnless { threatIsMate || threatIsCapture }.orEmpty() +
+                statementsFor(section.kingSafety, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON) +
+                planSentences(section.opponentPlan, glossary, forkedSquares, forOpponent = true),
+        )
+    }
 
     private fun myAttackBody(
         section: Section.MyAttack,
         glossary: Glossary,
         memory: RenderMemory,
         forkedSquares: Set<Square>,
-    ): String = listOf(
-        labelledLine("Мат", section.mate, forkedSquares, glossary, memory),
-        labelledLine("Взятия", section.captures, forkedSquares, glossary, memory),
-        labelledLine("Активизация", section.activity, forkedSquares, glossary, memory),
-        planLine("Мой план", section.plan, glossary, forkedSquares, forOpponent = false),
-    ).joinToString(System.lineSeparator())
+    ): String = checkList(
+        mates = statementsFor(section.mate, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON),
+        captures = statementsFor(section.captures, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON),
+        active = statementsFor(section.activity, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON) +
+            planSentences(section.plan, glossary, forkedSquares, forOpponent = false),
+    )
 
-    private fun labelledLine(
-        label: String,
-        facts: List<Fact>,
-        forkedSquares: Set<Square>,
-        glossary: Glossary,
-        memory: RenderMemory,
-    ): String = sentencesLine(label, statementsFor(facts, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON))
+    private fun checkList(mates: List<String>, captures: List<String>, active: List<String>): String = listOf(
+        sentencesLine("1. Маты", mates),
+        sentencesLine("2. Взятия", captures),
+        sentencesLine("3. Активные ходы", active),
+    ).joinToString(System.lineSeparator())
 
     /**
      * "{Метка}: {предложения}" одной строкой, либо "{Метка}: нет."
@@ -393,15 +468,15 @@ object TextRenderer {
         return "$label: " + decapitalize(sentences.joinToString(" "))
     }
 
-    /** Угроза живёт пунктом "моей позиции": это ответ на вопрос "что мне грозит", а не отдельная новость. */
-    private fun threatLine(
+    /** Угроза живёт пунктом плана соперника: это ответ на вопрос "что мне грозит", а не отдельная новость. */
+    private fun threatSentences(
         threat: ThreatFact?,
         pool: TemplatePool,
         glossary: Glossary,
         memory: RenderMemory,
         forkedSquares: Set<Square>,
-    ): String {
-        if (threat == null) return "Угроза: нет."
+    ): List<String> {
+        if (threat == null) return emptyList()
 
         val parts = mutableListOf(pool.choose(threat, threatIntroTemplates))
         if (threat.dropCentipawns >= CoachThresholds.THREAT_STRONG_CP) {
@@ -422,7 +497,7 @@ object TextRenderer {
             MAX_THREAT_CONSEQUENCES,
         )
 
-        return sentencesLine("Угроза", parts)
+        return parts
     }
 
     /**
@@ -436,11 +511,11 @@ object TextRenderer {
     private fun threatScale(threat: ThreatFact): String {
         if (threat.evidence.engineLine?.score is Score.Mate) return "дело идёт к мату"
         return when {
-            threat.dropCentipawns >= QUEEN_SCALE_CP -> "уровень ферзя"
-            threat.dropCentipawns >= ROOK_SCALE_CP -> "уровень ладьи"
-            threat.dropCentipawns >= MINOR_SCALE_CP -> "уровень лёгкой фигуры"
-            threat.dropCentipawns >= PAWN_MAGNITUDE_CP -> "больше пешки"
-            else -> "примерно пешка"
+            threat.dropCentipawns >= QUEEN_SCALE_CP -> "потеря примерно ферзя"
+            threat.dropCentipawns >= ROOK_SCALE_CP -> "потеря примерно ладьи"
+            threat.dropCentipawns >= MINOR_SCALE_CP -> "потеря примерно лёгкой фигуры"
+            threat.dropCentipawns >= PAWN_MAGNITUDE_CP -> "потеря больше пешки"
+            else -> "потеря примерно пешки"
         }
     }
 
@@ -449,23 +524,21 @@ object TextRenderer {
      * на повтор: сводка обязана повторять то, что прозвучало выше, иначе она
      * пустеет ровно там, где полезна. Отсюда своя, чистая [RenderMemory].
      */
-    private fun planLine(
-        label: String,
+    private fun planSentences(
         steps: List<PlanStep>,
         glossary: Glossary,
         forkedSquares: Set<Square>,
         forOpponent: Boolean,
-    ): String {
+    ): List<String> {
         val memory = RenderMemory()
         // Шаги с одной и той же идеей сливаем в одну фразу. Иначе план на три
         // слабые пешки выглядит как заевшая пластинка: "Давить на слабую пешку
         // соперника" трижды подряд, меняется только поле.
-        val sentences = steps
+        return steps
             .groupBy { it.idea }
             .mapNotNull { (idea, group) ->
                 planStepSentence(idea, group.flatMap { it.facts }, glossary, memory, forkedSquares, forOpponent)
             }
-        return sentencesLine(label, sentences)
     }
 
     // ——— УГРОЗА ———
@@ -490,6 +563,25 @@ object TextRenderer {
     }
 
     // ——— ЛУЧШИЙ ХОД ———
+
+    private fun bestMovesBody(
+        section: Section.BestMoves,
+        glossary: Glossary,
+        memory: RenderMemory,
+        forkedSquares: Set<Square>,
+    ): String? {
+        if (section.computerLineSan.isEmpty()) return null
+        val computer = "Компьютер: " + SanRuFormatter.line(section.computerLineSan) + "."
+        val human = section.human
+            ?: return computer + System.lineSeparator() + "Человек: тот же ход."
+
+        val why = statementsFor(human.facts, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON)
+            .ifEmpty { listOf("Ход заметен сразу и почти не уступает лучшему.") }
+        val loss = String.format(Locale.ROOT, "%.1f", human.lossVsBestCentipawns / 100.0)
+        return computer + System.lineSeparator() +
+            "Человек: " + SanRuFormatter.line(human.lineSan) + " (слабее лучшего на " + loss + "). " +
+            why.joinToString(" ")
+    }
 
     private fun whyThisMoveBody(
         section: Section.WhyThisMove,
@@ -582,7 +674,27 @@ object TextRenderer {
             return "Сыгран лучший ход."
         }
 
-        return comparisonBody(section, "Лучше было", "Сыгранный ход")
+        val body = comparisonBody(section, "Лучше было", "Сыгранный ход")
+        val question = lessonQuestion(section) ?: return body
+        return body + System.lineSeparator() + "Вопрос на будущее: " + question
+    }
+
+    /** Привычка, которая поймала бы эту ошибку. Зависит от того, чем соперник наказывает. */
+    private fun lessonQuestion(section: Section.PlayedMove): String? {
+        if (section.classification != MoveClassification.BLUNDER &&
+            section.classification != MoveClassification.MISTAKE
+        ) {
+            return null
+        }
+        return when (section.punishment.minByOrNull(::damageRank)) {
+            is MateFact, is BackRankFact -> "есть ли у соперника шах или мат в ответ на мой ход?"
+            is ForkFact -> "может ли соперник напасть одной фигурой сразу на две мои?"
+            is PinFact, is SkewerFact -> "что стоит за моей фигурой на линии, и что на самом деле защищено?"
+            is DiscoveredAttackFact -> "какие линии откроются, если фигура соперника уйдёт с места?"
+            is HangingPieceFact, is TrappedPieceFact, is OverloadedDefenderFact ->
+                "что останется без защиты после этого хода?"
+            else -> "что изменил последний ход соперника и что он теперь грозит сделать?"
+        }
     }
 
     /**
@@ -827,7 +939,7 @@ object TextRenderer {
     private fun alternativesBody(section: Section.Alternatives): String? {
         if (section.lines.isEmpty()) return null
         return section.lines.joinToString(System.lineSeparator()) { line ->
-            val moveRu = SanRuFormatter.move(line.moveSan)
+            val moveRu = SanRuFormatter.move(line.moveSan) + " (" + ScoreFormat.short(line.scoreFromWhite) + ")"
             val category = alternativeCategory(line.lossVsBestCentipawns)
             val continuation = line.continuationSan
             if (continuation.isEmpty()) {
@@ -867,6 +979,7 @@ object TextRenderer {
 
             is Section.WhyThisMove -> section.reasons.flatMap { it.facts }
             is Section.PlayedMove -> section.missed + section.punishment
+            is Section.BestMoves -> section.human?.facts ?: emptyList()
             is Section.Prophylaxis, is Section.Trap, is Section.Alternatives -> emptyList()
         }
     }

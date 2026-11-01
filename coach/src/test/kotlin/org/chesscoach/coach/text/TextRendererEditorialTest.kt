@@ -149,7 +149,7 @@ class TextRendererEditorialTest {
 
         // Порядок важен: рендер идёт по списку секций именно в этом порядке, и
         // память о сказанном заполняется по ходу дела — причина хода должна
-        // "занять" фразу раньше, чем до неё дойдёт МОЯ ПОЗИЦИЯ.
+        // "занять" фразу раньше, чем до неё дойдёт ПЛАН СОПЕРНИКА.
         val sections = listOf(
             Section.WhyThisMove("Rfe8", listOf(Reason(ReasonTier.KING_SAFETY, listOf(kingSafety)))),
             Section.MyPosition(kingSafety = listOf(kingSafety), loosePieces = emptyList()),
@@ -157,12 +157,12 @@ class TextRendererEditorialTest {
 
         val text = TextRenderer.render(explanation(sections))
 
-        // Факт целиком ушёл в причины хода, поэтому свою строку в МОЯ ПОЗИЦИЯ
+        // Факт целиком ушёл в причины хода, поэтому свою строку в ПЛАН СОПЕРНИКА
         // он занять уже не может. Раздел всё равно печатается — с честным
         // "нет" вместо повтора: одинаковый список пунктов от позиции к позиции
         // важнее, чем экономия одной строки.
-        assertTrue(text, text.contains("МОЯ ПОЗИЦИЯ"))
-        assertTrue(text, text.contains("Безопасность короля: нет."))
+        assertTrue(text, text.contains("ПЛАН СОПЕРНИКА"))
+        assertTrue(text, text.contains("3. Активные ходы: нет."))
         assertEquals(1, Regex("под давлением").findAll(text).count())
     }
 

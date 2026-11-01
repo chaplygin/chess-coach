@@ -7,6 +7,8 @@ import org.chesscoach.coach.engine.NullMoveUtil
 import org.chesscoach.coach.model.AlternativeLine
 import org.chesscoach.coach.model.BackRankFact
 import org.chesscoach.coach.model.CenterControlFact
+import org.chesscoach.coach.model.CoachThresholds
+import org.chesscoach.coach.model.HumanMove
 import org.chesscoach.coach.model.DevelopmentFact
 import org.chesscoach.coach.model.DiscoveredAttackFact
 import org.chesscoach.coach.model.Fact
@@ -53,6 +55,9 @@ class PipelineOrchestrator(
     private companion object {
         /** Насколько ход должен превосходить второй по силе, чтобы молчание детекторов стало подозрительным. */
         const val UNEXPLAINED_EDGE_CP = 150
+
+        /** Сколько полуходов варианта показывать: дальше он уже не читается. */
+        const val LINE_PLIES = 5
     }
 
     suspend fun explain(
@@ -163,9 +168,17 @@ class PipelineOrchestrator(
 
         // 5-6. Опровержение ловушки и быстрый поиск малой глубины — внутри TrapSelector,
         // и только если вообще есть из чего выбирать (нужна хотя бы одна альтернатива лучшему ходу).
+        var quickLines = emptyList<EngineLine>()
         if (bestLine != null && mainLines.size > 1) {
-            val quickLines = engineClient.analyse(fen, CoachSearchLimits(movetimeMs = 50, depth = 4, multiPv = 3))
+            quickLines = engineClient.analyse(fen, CoachSearchLimits(movetimeMs = 50, depth = 4, multiPv = 3))
             trapSelector.select(fen, sideToMove, mainLines, quickLines)?.let { sections += it }
+        }
+
+        if (bestLine != null && bestMoveUci != null) {
+            sections += Section.BestMoves(
+                computerLineSan = MoveNotation.uciToSanOrRaw(fen, bestLine.pv.take(LINE_PLIES)),
+                human = humanMove(fen, bestLine, mainLines, quickLines),
+            )
         }
 
         if (bestLine != null) {
@@ -228,6 +241,32 @@ class PipelineOrchestrator(
             captures = captures,
             activity = activity,
             plan = PlanBuilder.build(features, mover),
+        )
+    }
+
+    /**
+     * «Человеческий» ход: первый ход поиска малой глубины, который основной
+     * поиск оценил почти как лучший. Ход, замеченный при малой глубине, виден и
+     * человеку; глубокий поиск отсекает ходы, которые только кажутся хорошими.
+     */
+    private suspend fun humanMove(
+        fen: String,
+        bestLine: EngineLine,
+        mainLines: List<EngineLine>,
+        quickLines: List<EngineLine>,
+    ): HumanMove? {
+        val bestUci = bestLine.pv.firstOrNull() ?: return null
+        val quickFirst = quickLines.sortedBy { it.multiPvIndex }.firstOrNull()?.pv?.firstOrNull() ?: return null
+        if (quickFirst == bestUci) return null
+        val line = mainLines.firstOrNull { it.pv.firstOrNull() == quickFirst } ?: return null
+        val loss = ScoreFormat.centipawnLoss(bestLine.score, line.score)
+        if (loss > CoachThresholds.HUMAN_MOVE_MAX_LOSS_CP) return null
+
+        val diff = reasonDiffAnalyzer.analyse(fen, quickFirst, bestLine.score)
+        return HumanMove(
+            lineSan = MoveNotation.uciToSanOrRaw(fen, line.pv.take(LINE_PLIES)),
+            lossVsBestCentipawns = loss,
+            facts = diff.whyThisMove?.reasons?.flatMap { it.facts } ?: emptyList(),
         )
     }
 
@@ -307,11 +346,12 @@ class PipelineOrchestrator(
         is Section.PositionAssessment -> 0
         is Section.MyPosition -> 1
         is Section.MyAttack -> 2
-        is Section.WhyThisMove -> 3
-        is Section.PlayedMove -> 4
-        is Section.Prophylaxis -> 5
-        is Section.Trap -> 6
-        is Section.Alternatives -> 7
+        is Section.BestMoves -> 3
+        is Section.WhyThisMove -> 4
+        is Section.PlayedMove -> 5
+        is Section.Prophylaxis -> 6
+        is Section.Trap -> 7
+        is Section.Alternatives -> 8
     }
 
     private fun alternativesSection(
