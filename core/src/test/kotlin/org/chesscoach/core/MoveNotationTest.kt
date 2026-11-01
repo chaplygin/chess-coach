@@ -67,6 +67,26 @@ class ScoreFormatTest {
     }
 
     @Test
+    fun `formats short scores for the move list`() {
+        assertEquals("+2.5", ScoreFormat.short(Score.Cp(250)))
+        assertEquals("-4.3", ScoreFormat.short(Score.Cp(-430)))
+        assertEquals("0.0", ScoreFormat.short(Score.Cp(0)))
+        assertEquals("0.0", ScoreFormat.short(Score.Cp(-3)))
+        assertEquals("#3", ScoreFormat.short(Score.Mate(3)))
+        assertEquals("#-2", ScoreFormat.short(Score.Mate(-2)))
+        assertEquals("#", ScoreFormat.short(Score.Cp(GameAnalyzer.MATED_CP)))
+    }
+
+    @Test
+    fun `writes pieces as figurines and leaves the rest of the move alone`() {
+        val mark = 0xFE0E.toChar()
+        assertEquals("♞" + mark + "f3", MoveNotation.figurine("Nf3"))
+        assertEquals("bxc3", MoveNotation.figurine("bxc3"))
+        assertEquals("O-O", MoveNotation.figurine("O-O"))
+        assertEquals("e8=♛" + mark + "+", MoveNotation.figurine("e8=Q+"))
+    }
+
+    @Test
     fun `formats scores the way a human reads them`() {
         assertEquals("+0.85", ScoreFormat.display(Score.Cp(85)))
         assertEquals("-1.20", ScoreFormat.display(Score.Cp(-120)))

@@ -1,6 +1,7 @@
 package org.chesscoach.app.ui
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -19,11 +20,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material3.Text
+import org.chesscoach.app.R
 import org.chesscoach.core.BoardLayout
 import org.chesscoach.coach.model.ArrowStyle
 import org.chesscoach.coach.model.BoardArrow
@@ -31,14 +34,14 @@ import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
 
-private val LIGHT_SQUARE = Color(0xFFEDD6B0)
+// Цвета доски Lichess.
+private val LIGHT_SQUARE = Color(0xFFF0D9B5)
 private val DARK_SQUARE = Color(0xFFB58863)
-private val LAST_MOVE_TINT = Color(0x8FCDD26A)
+private val LAST_MOVE_TINT = Color(0x699BC700)
 
-// Подписи координат должны быть контрастны клетке, на которой лежат,
-// а не самой доске: своя пара цветов для светлой и тёмной клетки.
-private val COORDINATE_LABEL_ON_LIGHT = Color(0xFF3E2C1C)
-private val COORDINATE_LABEL_ON_DARK = Color(0xFFF5EBDD)
+// Подпись координаты берёт цвет противоположной клетки, как на Lichess.
+private val COORDINATE_LABEL_ON_LIGHT = DARK_SQUARE
+private val COORDINATE_LABEL_ON_DARK = LIGHT_SQUARE
 
 // Цвет стрелки зависит только от её смысла (ArrowStyle), не от вызывающего
 // кода: так экран разбора и легенда под доской не могут разъехаться в цвете.
@@ -59,18 +62,12 @@ private const val CONSEQUENCE_HEAD_FACTOR = 0.28f
 private const val DASH_ON_FACTOR = 0.14f
 private const val DASH_OFF_FACTOR = 0.10f
 
-/**
- * Фигуры символами Unicode, а не картинками.
- *
- * Двенадцать векторных файлов пришлось бы рисовать вслепую, без возможности
- * посмотреть на результат, тогда как символы масштабируются сами и дают
- * одинаковый вид на любом размере доски.
- */
-private val PIECE_GLYPHS = mapOf(
-    'K' to "♔", 'Q' to "♕", 'R' to "♖",
-    'B' to "♗", 'N' to "♘", 'P' to "♙",
-    'k' to "♚", 'q' to "♛", 'r' to "♜",
-    'b' to "♝", 'n' to "♞", 'p' to "♟",
+/** Набор фигур cburnett, тот же, что на Lichess по умолчанию. */
+private val PIECE_DRAWABLES = mapOf(
+    'K' to R.drawable.piece_wk, 'Q' to R.drawable.piece_wq, 'R' to R.drawable.piece_wr,
+    'B' to R.drawable.piece_wb, 'N' to R.drawable.piece_wn, 'P' to R.drawable.piece_wp,
+    'k' to R.drawable.piece_bk, 'q' to R.drawable.piece_bq, 'r' to R.drawable.piece_br,
+    'b' to R.drawable.piece_bb, 'n' to R.drawable.piece_bn, 'p' to R.drawable.piece_bp,
 )
 
 @Composable
@@ -91,9 +88,6 @@ fun ChessBoard(
     }
 
     BoxWithConstraints(modifier = modifier.fillMaxWidth().aspectRatio(1f)) {
-        // Размер символа считается от размера клетки, иначе на планшете фигуры
-        // окажутся крошечными, а на узком экране вылезут за края.
-        val glyphSize = (maxWidth.value / 8f * 0.74f).sp
         val coordinateFontSize = (maxWidth.value / 8f * 0.22f).sp
 
         Column(Modifier.fillMaxSize()) {
@@ -115,33 +109,40 @@ fun ChessBoard(
                                 ),
                             contentAlignment = Alignment.Center,
                         ) {
-                            squares[index]?.let { piece ->
-                                Text(
-                                    text = PIECE_GLYPHS[piece].orEmpty(),
-                                    style = TextStyle(
-                                        fontSize = glyphSize,
-                                        textAlign = TextAlign.Center,
-                                        color = if (piece.isUpperCase()) Color.White else Color.Black,
-                                    ),
-                                )
-                            }
-
-                            // Нижняя displayed-строка несёт буквы файлов, левый
-                            // displayed-столбец — номера горизонталей. Оба
-                            // разворачиваются вместе с доской через flipped.
+                            // Как на Lichess: буквы файлов внизу слева, номера
+                            // горизонталей справа сверху. Оба разворачиваются
+                            // вместе с доской через flipped.
                             if (row == 7) {
                                 Text(
                                     text = fileLabel(column, flipped).toString(),
-                                    style = TextStyle(fontSize = coordinateFontSize, color = coordinateColor),
+                                    style = TextStyle(
+                                        fontSize = coordinateFontSize,
+                                        fontWeight = FontWeight.Bold,
+                                        color = coordinateColor,
+                                    ),
                                     modifier = Modifier.align(Alignment.BottomStart).padding(1.dp),
                                 )
                             }
-                            if (column == 0) {
+                            if (column == 7) {
                                 Text(
                                     text = rankLabel(row, flipped).toString(),
-                                    style = TextStyle(fontSize = coordinateFontSize, color = coordinateColor),
-                                    modifier = Modifier.align(Alignment.TopStart).padding(1.dp),
+                                    style = TextStyle(
+                                        fontSize = coordinateFontSize,
+                                        fontWeight = FontWeight.Bold,
+                                        color = coordinateColor,
+                                    ),
+                                    modifier = Modifier.align(Alignment.TopEnd).padding(1.dp),
                                 )
+                            }
+
+                            squares[index]?.let { piece ->
+                                PIECE_DRAWABLES[piece]?.let { drawable ->
+                                    Image(
+                                        painter = painterResource(drawable),
+                                        contentDescription = null,
+                                        modifier = Modifier.fillMaxSize(),
+                                    )
+                                }
                             }
                         }
                     }

@@ -2,6 +2,7 @@ package org.chesscoach.core
 
 import com.github.bhlangonijr.chesslib.Side
 import java.util.Locale
+import kotlin.math.abs
 
 /**
  * Приведение оценки к виду, привычному человеку.
@@ -35,6 +36,25 @@ object ScoreFormat {
         }
 
         is Score.Mate -> if (score.movesToMate >= 0) "#${score.movesToMate}" else "#${score.movesToMate}"
+    }
+
+    /**
+     * Короткая оценка для списка ходов: +2.5, -4.3, 0.0, #3, #-2.
+     * Поставленный мат приходит предельной оценкой в сантипешках и печатается как #.
+     */
+    fun short(score: Score): String = when (score) {
+        is Score.Mate -> "#${score.movesToMate}"
+        is Score.Cp -> when {
+            abs(score.centipawns) >= GameAnalyzer.MATED_CP -> "#"
+            else -> {
+                val body = String.format(Locale.ROOT, "%.1f", score.centipawns / 100.0)
+                when {
+                    body == "0.0" || body == "-0.0" -> "0.0"
+                    score.centipawns > 0 -> "+$body"
+                    else -> body
+                }
+            }
+        }
     }
 
     /**

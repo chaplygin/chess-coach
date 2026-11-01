@@ -46,11 +46,11 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlin.math.abs
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.chesscoach.app.AppContainer
 import org.chesscoach.app.analysis.GameAnalysisProgress
@@ -122,6 +122,18 @@ fun GameReviewScreen(
         // Кэш — первым делом: партия могла быть разобрана раньше, и гонять
         // движок по ней заново незачем.
         evaluations = GameAnalysisStore.read(context, game.id)
+
+        // Разбор всей партии стартует сам: сразу видно, какие ходы ключевые.
+        val current = analysisProgress.first()
+        if (evaluations == null && current !is ScanState.Running && current !is ScanState.Done) {
+            runCatching { GameAnalysisService.start(context, game) }
+                .onFailure { error ->
+                    GameAnalysisProgress.update(
+                        game.id,
+                        ScanState.Failed(error.message ?: "Не удалось запустить разбор"),
+                    )
+                }
+        }
     }
 
     LaunchedEffect(scanState) {
@@ -464,7 +476,7 @@ private fun AnalysisControls(
             (scanState as? ScanState.Failed)?.let {
                 Text(it.message, style = MaterialTheme.typography.bodySmall, color = Color(0xFFC5221F))
             }
-            TextButton(onClick = onStart) { Text("Разобрать партию") }
+            TextButton(onClick = onStart) { Text("Разобрать ещё раз") }
         }
     }
 }
@@ -488,7 +500,7 @@ private fun MoveStrip(
 ) {
     LazyRow(
         state = state,
-        modifier = Modifier.fillMaxWidth().height(44.dp),
+        modifier = Modifier.fillMaxWidth().height(56.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -505,7 +517,7 @@ private fun MoveStrip(
                 null
             }
 
-            Row(
+            Column(
                 modifier = Modifier
                     .clip(RoundedCornerShape(6.dp))
                     .background(
@@ -516,17 +528,25 @@ private fun MoveStrip(
                         }
                     )
                     .clickable { onSelect(index) }
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text(
                     buildString {
                         if (ply.whiteMoved) append(ply.moveNumber.toString() + ". ")
-                        append(ply.san)
+                        append(MoveNotation.figurine(ply.san))
                     },
-                    fontFamily = FontFamily.Monospace,
                     fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
                     style = MaterialTheme.typography.bodyMedium,
                 )
+                // Оценка после хода: плюс за белых, минус за чёрных.
+                evaluationsByPly[ply.index]?.let { evaluation ->
+                    Text(
+                        ScoreFormat.short(evaluation.scoreAfterWhite),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color(0xFF5F6368),
+                    )
+                }
             }
         }
     }

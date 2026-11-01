@@ -31,6 +31,27 @@ object MoveNotation {
     fun uciToSanOrRaw(fen: String, uciMoves: List<String>): List<String> =
         runCatching { uciToSan(fen, uciMoves) }.getOrElse { uciMoves }
 
+    /**
+     * Запись хода значком фигуры, как в списке ходов на Lichess: ♞f3, ♛xd5, e8=♛.
+     * Заглавные буквы в SAN означают только фигуры, рокировка записана буквой O.
+     */
+    fun figurine(san: String): String = buildString {
+        for (char in san) {
+            val glyph = FIGURINES[char]
+            if (glyph == null) {
+                append(char)
+            } else {
+                append(glyph)
+                append(TEXT_PRESENTATION)
+            }
+        }
+    }
+
+    private val FIGURINES = mapOf('K' to '♚', 'Q' to '♛', 'R' to '♜', 'B' to '♝', 'N' to '♞')
+
+    // Без этого знака телефон может нарисовать фигуру цветным эмодзи.
+    private val TEXT_PRESENTATION = 0xFE0E.toChar()
+
     /** Чей ход в позиции. */
     fun sideToMove(fen: String): Side = Board().apply { loadFromFen(fen) }.sideToMove
 

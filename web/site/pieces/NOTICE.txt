@@ -1,0 +1,3 @@
+Набор фигур cburnett, как на Lichess. Автор Colin M.L. Burnett, лицензия GPLv2+.
+Источник: https://github.com/lichess-org/lila/tree/master/public/piece/cburnett
+Векторы piece_*.xml в приложении сделаны из этих же файлов.

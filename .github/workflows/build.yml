@@ -82,7 +82,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p out
-          cp app/build/outputs/apk/debug/app-debug.apk "out/chesscoach-${GITHUB_SHA::7}.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "out/chesscoach-0.2.${GITHUB_RUN_NUMBER}.apk"
           ls -lh out/
           # Пустой jniLibs не ломает сборку — ошибка вылезла бы только на телефоне.
           if unzip -l app/build/outputs/apk/debug/app-debug.apk | grep -q 'lib/arm64-v8a/libstockfish.so'; then
@@ -93,7 +93,7 @@ jobs:
           fi
 
       # Имя артефакта постоянное, чтобы `gh run download --name chesscoach-debug`
-      # всегда работал одинаково. Имя файла внутри помечено коротким SHA.
+      # всегда работал одинаково. Имя файла внутри содержит версию приложения.
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:

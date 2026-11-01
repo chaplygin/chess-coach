@@ -9,7 +9,7 @@ OUT="web/build/site"
 
 rm -rf "$OUT"
 mkdir -p "$OUT/engine"
-cp web/site/* "$OUT/"
+cp -r web/site/* "$OUT/"
 cp web/build/generated/teavm/js/coach.js "$OUT/"
 
 # Движок берётся из npm, а не из репозитория: это чужой бинарник, как и в APK.

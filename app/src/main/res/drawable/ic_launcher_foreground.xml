@@ -2,33 +2,29 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <!--
-        Силуэт шахматного короля из простых геометрических фигур: крест,
-        шар, корона, тело, основание. Сложный рисунок вслепую, без
-        возможности посмотреть на результат, был бы бессмысленным риском —
-        узнаваемый простой контур надёжнее.
-    -->
-    <path
-        android:fillColor="@color/ic_launcher_foreground_fill"
-        android:pathData="M51,22 L57,22 L57,32 L51,32 Z" />
-    <path
-        android:fillColor="@color/ic_launcher_foreground_fill"
-        android:pathData="M46,25 L62,25 L62,31 L46,31 Z" />
-    <path
-        android:fillColor="@color/ic_launcher_foreground_fill"
-        android:pathData="M54,37 m-6,0 a6,6 0 1,0 12,0 a6,6 0 1,0 -12,0" />
-    <path
-        android:fillColor="@color/ic_launcher_foreground_fill"
-        android:pathData="M42,44 L66,44 L70,51 L38,51 Z" />
-    <path
-        android:fillColor="@color/ic_launcher_foreground_fill"
-        android:pathData="M38,51 L70,51 L77,70 L31,70 Z" />
-    <path
-        android:fillColor="@color/ic_launcher_foreground_fill"
-        android:pathData="M33,70 L75,70 L80,79 L28,79 Z" />
-    <path
-        android:fillColor="@color/ic_launcher_foreground_fill"
-        android:pathData="M24,79 L84,79 L84,85 L24,85 Z" />
+    android:viewportWidth="120"
+    android:viewportHeight="120">
+    <!-- Белое облачко реплики с конём: тренер объясняет ход. Сжато к центру,
+         потому что лаунчер обрезает края адаптивной иконки. -->
+    <group
+        android:pivotX="60"
+        android:pivotY="60"
+        android:scaleX="0.74"
+        android:scaleY="0.74">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M60 19c-24 0-42 16-42 37 0 12 6 22 16 29l-4 16 18-10c4 1 8 1 12 1 24 0 42-15 42-36S84 19 60 19z" />
+        <group
+            android:scaleX="0.58"
+            android:scaleY="0.58"
+            android:translateX="25"
+            android:translateY="13">
+            <path
+                android:fillColor="#FF0A4FD6"
+                android:pathData="M41 92h40c1-14-3-27-10-37l-1-9c6 4 9 9 11 14l6-5c-3-13-13-25-27-27l-3-6-5 7c-9 4-16 12-20 22l-6 8 5 7 10-2 8-5c1 6-1 10-5 15-5 6-4 12-3 18z" />
+            <path
+                android:fillColor="#FF0A4FD6"
+                android:pathData="M39.5 92h43a3.5 3.5 0 0 1 0 7h-43a3.5 3.5 0 0 1 0-7z" />
+        </group>
+    </group>
 </vector>

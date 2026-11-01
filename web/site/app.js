@@ -9,7 +9,8 @@ const REDIRECT_URI = location.origin + location.pathname;
 const NEWLINE = String.fromCharCode(10);
 const TEXT_GLYPH = String.fromCharCode(0xfe0e);
 const SCAN_MOVETIME_MS = 700;
-const GLYPHS = { k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟" };
+const MATED_CP = 100000;
+const FIGURINES = { K: "♚", Q: "♛", R: "♜", B: "♝", N: "♞" };
 const ARROW_COLORS = { BEST_MOVE: "#2f9e62", PLAYED_MOVE: "#3b78c4", THREAT: "#d0442f", CONSEQUENCE: "#d6972a" };
 const ARROW_NAMES = { BEST_MOVE: "лучший ход", PLAYED_MOVE: "сыгранный", THREAT: "угроза", CONSEQUENCE: "следствие" };
 const CLASS_MARK = { INACCURACY: "?!", MISTAKE: "?", BLUNDER: "??" };
@@ -204,6 +205,21 @@ async function showGames() {
 
 // ---------- Разбор ----------
 
+// Запись хода значком фигуры, как в списке ходов на Lichess.
+function figurine(san) {
+  return [...san].map((char) => (FIGURINES[char] ? FIGURINES[char] + TEXT_GLYPH : char)).join("");
+}
+
+// Оценка после хода: плюс за белых, минус за чёрных. Та же запись, что ScoreFormat.short в приложении.
+function shortScore({ cp, mate }) {
+  if (mate !== null) return "#" + mate;
+  if (cp === null) return "";
+  if (Math.abs(cp) >= MATED_CP) return "#";
+  const body = (cp / 100).toFixed(1);
+  if (body === "0.0" || body === "-0.0") return "0.0";
+  return cp > 0 ? "+" + body : body;
+}
+
 function parsePositions(text) {
   return text.split(";").filter(Boolean).map((row) => {
     const f = row.split("|");
@@ -251,11 +267,15 @@ function drawBoard(fen, flipped, lastUci, arrows) {
 
   const name = (s) => "abcdefgh"[s.file] + (8 - s.rank);
   const lit = lastUci ? [lastUci.slice(0, 2), lastUci.slice(2, 4)] : [];
-  const board = h("div", { class: "board", role: "img", "aria-label": "Позиция на доске" }, squares.map((s) => h("div", {
+  const pieceFile = (piece) => "pieces/" + (piece === piece.toUpperCase() ? "w" : "b") + piece.toUpperCase() + ".svg";
+  // Как на Lichess: буквы файлов внизу слева, номера горизонталей справа сверху.
+  const board = h("div", { class: "board", role: "img", "aria-label": "Позиция на доске" }, squares.map((s, index) => h("div", {
     class: "sq " + ((s.rank + s.file) % 2 ? "d" : "l") + (lit.includes(name(s)) ? " hl" : ""),
-  }, s.piece ? h("span", {
-    class: "pc " + (s.piece === s.piece.toUpperCase() ? "w" : "b"),
-  }, GLYPHS[s.piece.toLowerCase()] + TEXT_GLYPH) : null)));
+  },
+    index >= 56 ? h("span", { class: "coord file" }, name(s)[0]) : null,
+    index % 8 === 7 ? h("span", { class: "coord rank" }, name(s)[1]) : null,
+    s.piece ? h("img", { class: "pc", src: pieceFile(s.piece), alt: "", draggable: "false" }) : null,
+  )));
 
   const wrap = h("div", { class: "board-wrap" }, board);
   if (arrows.length) wrap.append(drawArrows(arrows, flipped));
@@ -343,6 +363,7 @@ function showReview(game) {
   if (evaluations.length !== positions.length) evaluations = [];
   let scan = null;
   let coachText = "";
+  let candidateText = "";
   let coachWaiting = false;
   let arrows = [];
   let request = 0;
@@ -392,6 +413,15 @@ function showReview(game) {
     });
   }
 
+  // Прогресс обновляется точечно: полная перерисовка раз в секунду сбивала бы
+  // прокрутку и ввод своего хода, пока идёт разбор.
+  function showScanProgress() {
+    const bar = app.querySelector(".scan-bar");
+    const label = app.querySelector(".scan-label");
+    if (bar) bar.style.width = Math.round((scan.done / scan.total) * 100) + "%";
+    if (label) label.textContent = "Движок считает партию: " + scan.done + " из " + scan.total + " позиций";
+  }
+
   async function runScan() {
     scan = { done: 0, total: positions.length + 1, error: null };
     render();
@@ -405,7 +435,7 @@ function showReview(game) {
         if (!score) throw new Error("движок не вернул оценку");
         scores.push(score);
         scan.done = scores.length;
-        render();
+        showScanProgress();
       }
       const positionsText = replay(game.moves, game.initialFen);
       const result = classify(positionsText, scores.join(";"));
@@ -428,10 +458,20 @@ function showReview(game) {
       moveList.append(h("button", {
         class: "cls-" + cls + (index + 1 === ply ? " on" : ""),
         onclick: () => goTo(index + 1),
-      }, position.san + (CLASS_MARK[cls] || "")));
+      },
+        h("span", {}, figurine(position.san) + (CLASS_MARK[cls] || "")),
+        evaluation ? h("span", { class: "eval" }, shortScore(evaluation)) : null,
+      ));
     });
 
-    const candidate = h("input", { placeholder: "Свой ход, например Nf3", "aria-label": "Свой ход" });
+    const candidateHadFocus = document.activeElement?.classList.contains("candidate");
+    const candidate = h("input", {
+      class: "candidate",
+      placeholder: "Свой ход, например Nf3",
+      "aria-label": "Свой ход",
+      value: candidateText,
+      oninput: (event) => { candidateText = event.target.value; },
+    });
     const usedStyles = [...new Set(arrows.map((a) => a.style))];
     const left = h("div", {},
       drawBoard(fenAt(ply), flipped, ply > 0 ? positions[ply - 1].uci : "", arrows),
@@ -451,12 +491,12 @@ function showReview(game) {
       h("p", { class: "note", style: "margin:0" }, [OUTCOME_TEXT[game.outcome], game.opening].filter(Boolean).join(" · ")),
       evaluations.length ? drawGraph(evaluations, ply, goTo) : null,
       scan && !scan.error ? h("div", {},
-        h("div", { class: "progress" }, h("div", { style: "width:" + Math.round((scan.done / scan.total) * 100) + "%" })),
-        h("p", { class: "note" }, "Движок считает партию: " + scan.done + " из " + scan.total + " позиций"),
+        h("div", { class: "progress" }, h("div", { class: "scan-bar", style: "width:" + Math.round((scan.done / scan.total) * 100) + "%" })),
+        h("p", { class: "note scan-label" }, "Движок считает партию: " + scan.done + " из " + scan.total + " позиций"),
       ) : null,
       scan && scan.error ? h("p", { class: "error" }, "Разбор не удался: " + scan.error) : null,
-      !evaluations.length && (!scan || scan.error) ? h("div", { class: "row" },
-        h("button", { class: "primary", onclick: runScan }, "Найти ошибки во всей партии"),
+      scan && scan.error ? h("div", { class: "row" },
+        h("button", { class: "primary", onclick: runScan }, "Разобрать ещё раз"),
       ) : null,
       moveList,
       h("div", { class: "coach" + (coachWaiting ? " wait" : "") }, coachText),
@@ -467,6 +507,7 @@ function showReview(game) {
     );
 
     app.replaceChildren(h("div", { class: "review" }, left, right));
+    if (candidateHadFocus) candidate.focus();
     moveList.querySelector(".on")?.scrollIntoView({ block: "nearest" });
   }
 
@@ -480,6 +521,8 @@ function showReview(game) {
   render();
   window.scrollTo(0, 0);
   goTo(0);
+  // Разбор всей партии стартует сам: сразу видно, какие ходы ключевые.
+  if (!evaluations.length) runScan();
 }
 
 // ---------- Запуск ----------

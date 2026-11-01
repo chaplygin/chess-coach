@@ -7,8 +7,6 @@
   --line: #ddd8cd;
   --accent: #2f6b4f;
   --accent-text: #ffffff;
-  --light-square: #efe6d2;
-  --dark-square: #a98a63;
   --highlight: rgba(236, 196, 62, 0.55);
   --best: #2f7d55;
   --inaccuracy: #b98a12;
@@ -25,8 +23,6 @@
     --line: #3a372f;
     --accent: #55a57e;
     --accent-text: #10130f;
-    --light-square: #cdbd9f;
-    --dark-square: #806747;
     --best: #5fb98c;
     --inaccuracy: #dcb13c;
     --mistake: #e78f4a;
@@ -119,12 +115,13 @@ input {
 .board-wrap { position: relative; width: 100%; aspect-ratio: 1; border-radius: 4px; overflow: hidden; }
 .board { display: grid; grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr); width: 100%; height: 100%; }
 .sq { position: relative; display: flex; align-items: center; justify-content: center; container-type: size; }
-.sq.l { background: var(--light-square); }
-.sq.d { background: var(--dark-square); }
-.sq.hl::after { content: ""; position: absolute; inset: 0; background: var(--highlight); }
-.pc { position: relative; z-index: 1; font-size: 82cqmin; line-height: 1; user-select: none; }
-.pc.w { color: #fbf8f0; text-shadow: 0 0 2px #1d1a15, 0 0 2px #1d1a15, 0 1px 1px #1d1a15; }
-.pc.b { color: #1d1a15; text-shadow: 0 0 1px #fbf8f0; }
+.sq.l { background: #f0d9b5; color: #b58863; }
+.sq.d { background: #b58863; color: #f0d9b5; }
+.sq.hl::after { content: ""; position: absolute; inset: 0; background: rgba(155, 199, 0, 0.41); }
+.pc { position: relative; z-index: 1; width: 100%; height: 100%; display: block; user-select: none; -webkit-user-drag: none; }
+.coord { position: absolute; z-index: 1; font-size: 22cqmin; font-weight: 700; line-height: 1; user-select: none; }
+.coord.file { left: 4%; bottom: 3%; }
+.coord.rank { right: 4%; top: 3%; }
 .arrows { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; }
 
 .controls { display: flex; gap: 6px; margin: 10px 0; }
@@ -137,7 +134,8 @@ input {
 
 .moves { display: grid; grid-template-columns: 34px 1fr 1fr; max-height: 190px; overflow-y: auto; margin: 10px 0; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); font-size: 15px; }
 .moves .num { padding: 3px 6px; color: var(--muted); }
-.moves button { padding: 3px 6px; border: 0; border-radius: 0; background: transparent; text-align: left; }
+.moves button { display: flex; justify-content: space-between; gap: 6px; padding: 3px 6px; border: 0; border-radius: 0; background: transparent; text-align: left; }
+.moves .eval { font-size: 13px; font-weight: 400; color: var(--muted); }
 .moves button.on { background: var(--highlight); }
 .cls-INACCURACY { color: var(--inaccuracy); font-weight: 600; }
 .cls-MISTAKE { color: var(--mistake); font-weight: 600; }

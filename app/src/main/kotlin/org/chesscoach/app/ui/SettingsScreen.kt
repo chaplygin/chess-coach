@@ -25,6 +25,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
 import org.chesscoach.app.AppContainer
 import org.chesscoach.app.analysis.GameAnalysisStore
@@ -33,10 +34,11 @@ import org.chesscoach.engine.EngineSettingsStore
 
 private const val HASH_STEP_MB = 16
 private const val SUCCESS_TEXT_COLOR = 0xFF1E8E3E
+private const val SITE_URL = "https://chaplygin.github.io/chess-coach/"
 
 /**
  * Экран настроек (M8): Threads/Hash движка, выход из аккаунта, очистка кэша
- * разбора партий, версии приложения и движка.
+ * разбора партий, версии приложения и движка, ссылка на сайт.
  */
 @Composable
 fun SettingsScreen(
@@ -45,6 +47,9 @@ fun SettingsScreen(
     onSignedOut: () -> Unit,
 ) {
     val context = LocalContext.current
+    val uriHandler = LocalUriHandler.current
+
+    var siteOpenFailed by remember { mutableStateOf(false) }
 
     var threads by remember { mutableStateOf(container.engine.settings.threads()) }
     var hashMb by remember { mutableStateOf(container.engine.settings.hashMb()) }
@@ -147,6 +152,29 @@ fun SettingsScreen(
 
                 settingsUpdateMessage(updateState)?.let {
                     Text(it, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Сайт", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Разбор партий в браузере: $SITE_URL",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                OutlinedButton(
+                    onClick = {
+                        // На телефоне может не оказаться браузера: это не повод падать.
+                        siteOpenFailed = runCatching { uriHandler.openUri(SITE_URL) }.isFailure
+                    },
+                ) { Text("Открыть сайт") }
+
+                if (siteOpenFailed) {
+                    Text(
+                        "Не удалось открыть браузер.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                 }
             }
         }

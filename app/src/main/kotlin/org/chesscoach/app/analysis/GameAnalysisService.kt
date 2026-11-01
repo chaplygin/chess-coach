@@ -11,6 +11,7 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -34,6 +35,7 @@ import org.chesscoach.core.GameSummary
 class GameAnalysisService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val activeScans = AtomicInteger(0)
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -58,9 +60,12 @@ class GameAnalysisService : Service() {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
         )
 
+        // Партии открываются подряд, и сканы идут вместе: сервис останавливает
+        // только последний из них, иначе короткая партия оборвала бы длинную.
+        activeScans.incrementAndGet()
         scope.launch {
             runAnalysis(gameId, movesSan, initialFen)
-            stopSelf(startId)
+            if (activeScans.decrementAndGet() == 0) stopSelf()
         }
 
         return START_NOT_STICKY
