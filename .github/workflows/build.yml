@@ -154,11 +154,6 @@ jobs:
       - name: Assemble site
         run: bash tools/ci/build_site.sh
 
-      - name: Check Lichess CORS
-        run: |
-          curl -s -D - -o /dev/null -H "Origin: https://chaplygin.github.io" "https://lichess.org/api/games/user/chaplygin?max=1" | grep -iE "^HTTP|access-control" || true
-          curl -s -D - -o /dev/null -X OPTIONS -H "Origin: https://chaplygin.github.io" -H "Access-Control-Request-Method: POST" "https://lichess.org/api/token" | grep -iE "^HTTP|access-control" || true
-
       - name: Upload site
         uses: actions/upload-pages-artifact@v3
         with:
