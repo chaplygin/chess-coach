@@ -9,6 +9,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -20,13 +24,21 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.chesscoach.app.AppContainer
+import org.chesscoach.app.analysis.GameAnalysisStore
+import org.chesscoach.coach.analysis.AnalyzedGame
+import org.chesscoach.core.GameReplay
 import org.chesscoach.core.catchingNonCancellation
 import org.chesscoach.core.GameSummary
 import org.chesscoach.core.PlayerColor
@@ -46,6 +58,9 @@ fun GameListScreen(
     var username by remember { mutableStateOf(container.tokenStore.username()) }
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
+    var report by remember { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
         loading = true
@@ -84,7 +99,29 @@ fun GameListScreen(
                 Text("Мои партии", style = MaterialTheme.typography.headlineSmall)
                 username?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             }
-            TextButton(onClick = onBack) { Text("В меню") }
+            Row {
+                TextButton(
+                    enabled = games.isNotEmpty(),
+                    onClick = {
+                        scope.launch {
+                            report = catchingNonCancellation {
+                                withContext(Dispatchers.Default) {
+                                    val analyzed = games.mapNotNull { game ->
+                                        val evaluations = GameAnalysisStore.read(context, game.id) ?: return@mapNotNull null
+                                        AnalyzedGame(
+                                            iAmWhite = game.myColor == PlayerColor.WHITE,
+                                            positions = GameReplay.replay(game.movesSan, game.initialFen),
+                                            classifications = evaluations.associate { it.ply to it.classification },
+                                        )
+                                    }
+                                    container.coach.errorReport(analyzed).render()
+                                }
+                            }.getOrElse { "Не удалось собрать сводку." }
+                        }
+                    },
+                ) { Text("Мои ошибки") }
+                TextButton(onClick = onBack) { Text("В меню") }
+            }
         }
 
         when {
@@ -122,6 +159,19 @@ fun GameListScreen(
             }
         }
 
+    }
+
+    report?.let { text ->
+        AlertDialog(
+            onDismissRequest = { report = null },
+            confirmButton = { TextButton(onClick = { report = null }) { Text("Закрыть") } },
+            title = { Text("Мои ошибки") },
+            text = {
+                SelectionContainer {
+                    Text(text, modifier = Modifier.verticalScroll(rememberScrollState()))
+                }
+            },
+        )
     }
 }
 

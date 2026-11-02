@@ -3,13 +3,17 @@ package org.chesscoach.web
 import com.github.bhlangonijr.chesslib.Board
 import org.chesscoach.coach.CandidateResult
 import org.chesscoach.coach.CoachEngine
+import org.chesscoach.coach.analysis.AnalyzedGame
 import org.chesscoach.coach.engine.CoachSearchLimits
 import org.chesscoach.coach.engine.EngineClient
 import org.chesscoach.coach.model.BoardMarks
+import org.chesscoach.coach.model.Variation
+import org.chesscoach.coach.model.Variations
 import org.chesscoach.coach.text.TextRenderer
 import org.chesscoach.core.EngineLine
 import org.chesscoach.core.GameAnalyzer
 import org.chesscoach.core.GameReplay
+import org.chesscoach.core.MoveClassification
 import org.chesscoach.core.PlyPosition
 import org.chesscoach.core.Score
 import org.chesscoach.core.UciParser
@@ -46,6 +50,7 @@ fun interface DoneCallback : JSObject {
 object WebCoach {
     private const val ROW = ";"
     private const val FIELD = "|"
+    private const val PART = "~"
     private const val NO_DEPTH = 0
     private const val MATED_CP = -GameAnalyzer.MATED_CP
 
@@ -115,23 +120,54 @@ object WebCoach {
                 .explain(fen, playedUci?.takeIf { it.isNotEmpty() }, opening?.takeIf { it.isNotEmpty() })
             val arrows = BoardMarks.of(explanation)
                 .joinToString(ROW) { it.from + it.to + ":" + it.style.name }
-            TextRenderer.render(explanation) to arrows
+            TextRenderer.render(explanation) to (arrows + PART + encodeVariations(Variations.of(explanation)))
         }
     }
 
-    /** Разбор хода, который человек предложил сам. */
+    /** Разбор хода, который человек предложил сам. Вторая строка ответа: его вариант. */
     @JvmStatic
     @JSExport
     fun tryCandidate(fen: String, input: String, bridge: EngineBridge, done: DoneCallback) {
         launch(done) {
-            val text = when (val result = CoachEngine(BridgeClient(bridge)).tryCandidate(fen, input)) {
-                is CandidateResult.Explained -> result.text
-                CandidateResult.NotLegal -> "Такого хода в этой позиции нет."
-                CandidateResult.Ambiguous -> "Подходит несколько ходов, уточните запись."
-                CandidateResult.NoVerdict -> "Движку нечего сказать об этом ходе."
+            when (val result = CoachEngine(BridgeClient(bridge)).tryCandidate(fen, input)) {
+                is CandidateResult.Explained -> result.text to encodeVariations(listOfNotNull(result.variation))
+                CandidateResult.NotLegal -> "Такого хода в этой позиции нет." to ""
+                CandidateResult.Ambiguous -> "Подходит несколько ходов, уточните запись." to ""
+                CandidateResult.NoVerdict -> "Движку нечего сказать об этом ходе." to ""
             }
-            text to ""
         }
+    }
+
+    /**
+     * Сводка ошибок по партиям. [games] разделены [PART], в каждой: цвет, ходы,
+     * начальная позиция и классификации через запятую. Партия без разбора не передаётся.
+     */
+    @JvmStatic
+    @JSExport
+    fun errorReport(games: String, done: DoneCallback) {
+        launch(done) {
+            val parsed = games.split(PART).filter { it.isNotEmpty() }.map { row ->
+                val f = row.split(FIELD)
+                val classes = f[3].split(",").withIndex()
+                    .associate { (index, name) -> index to MoveClassification.valueOf(name) }
+                AnalyzedGame(
+                    iAmWhite = f[0] == "white",
+                    positions = GameReplay.replay(f[1].split(" ").filter { it.isNotEmpty() }, f[2].takeIf { it.isNotEmpty() }),
+                    classifications = classes,
+                )
+            }
+            CoachEngine(NoEngine).errorReport(parsed).render() to ""
+        }
+    }
+
+    /** Сводке движок не нужен: всё уже посчитано при разборе партий. */
+    private object NoEngine : EngineClient {
+        override suspend fun analyse(fen: String, limits: CoachSearchLimits): List<EngineLine> = emptyList()
+    }
+
+    /** Варианты строкой: title|fen,fen|san san;... */
+    private fun encodeVariations(variations: List<Variation>): String = variations.joinToString(ROW) {
+        it.title + FIELD + it.fens.joinToString(",") + FIELD + it.san.joinToString(" ")
     }
 
     private fun launch(done: DoneCallback, block: suspend () -> Pair<String, String>) {

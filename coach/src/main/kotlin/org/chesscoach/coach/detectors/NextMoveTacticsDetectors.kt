@@ -51,7 +51,12 @@ class ForkThreatDetector : Detector {
         legalMovesFor(board, side)
             .filter { board.getPiece(it.from).pieceType != PieceType.KING && board.getPiece(it.to) == Piece.NONE }
             .mapNotNull { move ->
-                forks.forkFrom(boardAfter(board, side, move), move.to)?.let { fork ->
+                val after = boardAfter(board, side, move)
+                forks.forkFrom(after, move.to)?.let { fork ->
+                    val opponent = side.flip()
+                    val delta = SeeCalculator.firstCaptureDelta(after, move.to, opponent)
+                    val traded = delta != null && delta > -SeeCalculator.WINNING_MIN_CP
+                    val taker = if (traded) SeeCalculator.firstCapture(after, move.to, opponent)?.from else null
                     ForkThreatFact(
                         from = move.from,
                         to = move.to,
@@ -59,6 +64,9 @@ class ForkThreatDetector : Detector {
                         targets = fork.targets,
                         favours = side,
                         evidence = Evidence.onBoard(board, move.from, move.to, *fork.targets.toTypedArray()),
+                        tradeLineSan = if (traded) SeeCalculator.exchangeLineSan(after, move.to, opponent) else emptyList(),
+                        tradeDeltaCentipawns = delta.takeIf { traded } ?: 0,
+                        tradedBy = taker?.let(after::getPiece),
                     )
                 }
             }

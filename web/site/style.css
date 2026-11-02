@@ -156,3 +156,9 @@ input {
 @media (max-width: 800px) {
   .review { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* Вариант тренера: ходы можно проиграть на доске. */
+.variations { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.variation { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.variation button.on { outline: 2px solid var(--accent); }
+.coach details { margin-top: 12px; }

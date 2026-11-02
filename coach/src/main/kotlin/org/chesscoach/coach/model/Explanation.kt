@@ -89,6 +89,23 @@ data class AlternativeLine(
     val continuationSan: List<String>,
 )
 
+/**
+ * Что осталось в дебюте: лёгкие фигуры на исходных полях, рокировка и центр.
+ * Считается по доске: "развивайте фигуры" без названий проверить нельзя.
+ */
+data class DevelopmentPlan(
+    val undeveloped: List<com.github.bhlangonijr.chesslib.Square>,
+    val castlingPending: Boolean,
+    val needsCenter: Boolean,
+    val evidence: Evidence,
+)
+
+/**
+ * Удар следующим ходом, проверенный движком. [scoreFromWhite] — оценка после
+ * этого хода; у ударов соперника её нет: она считалась бы при пропуске моего хода.
+ */
+data class CheckedAdvice(val fact: Fact, val scoreFromWhite: Score? = null)
+
 /** Ход, заметный уже при малой глубине расчёта и почти не уступающий лучшему. */
 data class HumanMove(
     val lineSan: List<String>,
@@ -129,6 +146,8 @@ sealed interface Section {
          * пешка" человек видит на доске и проверяет за секунду.
          */
         val pieceDifference: Map<com.github.bhlangonijr.chesslib.PieceType, Int> = emptyMap(),
+        /** Что осталось сделать в дебюте: называет фигуры, а не общие правила. */
+        val developmentPlan: DevelopmentPlan? = null,
     ) : Section
 
     /**
@@ -147,6 +166,10 @@ sealed interface Section {
         val threat: ThreatFact? = null,
         val opponentPlan: List<PlanStep> = emptyList(),
         val exchanges: List<ExchangeFact> = emptyList(),
+        /** Безопасные шахи соперника записью SAN. */
+        val checks: List<String> = emptyList(),
+        /** Удары следующим ходом, проверенные движком. */
+        val advice: List<CheckedAdvice> = emptyList(),
     ) : Section
 
     /** Моя атака: чем я могу наказать соперника, и к чему веду дело. */
@@ -156,6 +179,10 @@ sealed interface Section {
         val activity: List<Fact>,
         val plan: List<PlanStep> = emptyList(),
         val exchanges: List<ExchangeFact> = emptyList(),
+        /** Свои безопасные шахи записью SAN. */
+        val checks: List<String> = emptyList(),
+        /** Удары следующим ходом, проверенные движком. */
+        val advice: List<CheckedAdvice> = emptyList(),
     ) : Section
 
     /**
@@ -180,6 +207,16 @@ sealed interface Section {
          * было. Без них «зевок» — это ярлык с числом, а не объяснение.
          */
         val punishment: List<Fact> = emptyList(),
+        /** Оценка после этого хода и после лучшего, от лица белых. */
+        val scoreAfterFromWhite: Score? = null,
+        val bestScoreFromWhite: Score? = null,
+        /** Вариант с этим ходом первым. */
+        val lineSan: List<String> = emptyList(),
+        val lineUci: List<String> = emptyList(),
+        /** Что к концу варианта с материалом ходившего: минус — потерял. Null — вариант кончается посреди размена. */
+        val materialSwing: Int? = null,
+        /** Что соперник получил к концу варианта: без этого позиционная потеря остаётся без объяснения. */
+        val lineGains: List<Fact> = emptyList(),
     ) : Section {
         val matchesBest: Boolean get() = playedUci == bestUci
     }
@@ -207,6 +244,7 @@ sealed interface Section {
     data class BestMoves(
         val computerLineSan: List<String>,
         val human: HumanMove? = null,
+        val computerLineUci: List<String> = emptyList(),
     ) : Section
 
     data class Prophylaxis(val fact: ProphylaxisFact) : Section
@@ -216,6 +254,9 @@ sealed interface Section {
         val lossCentipawns: Int,
         val refutationSan: List<String>,
         val verdict: MaterialVerdict,
+        val scoreFromWhite: Score? = null,
+        /** Ход и опровержение одним вариантом: его можно проиграть на доске. */
+        val lineUci: List<String> = emptyList(),
     ) : Section
 
     data class Alternatives(val lines: List<AlternativeLine>) : Section
@@ -238,6 +279,8 @@ sealed interface Section {
         val positional: List<Fact> = emptyList(),
         val mateIn: Int? = null,
         val matePattern: MatePattern? = null,
+        /** Материал к концу варианта, от лица белых: лишний сейчас конь мог быть уже под боем. */
+        val materialAfterLine: Int? = null,
     ) : Section
 }
 

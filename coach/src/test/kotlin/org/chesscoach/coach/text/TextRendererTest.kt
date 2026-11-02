@@ -41,7 +41,10 @@ class TextRendererTest {
     fun `header names the move number, the side to move and the score, dot decimal as ScoreFormat gives it`() {
         val text = TextRenderer.render(explanation(emptyList()))
 
-        assertEquals("Миттельшпиль · Ход 14, чёрные" + System.lineSeparator() + "Оценка +0.35", text)
+        val lines = text.lines()
+        assertEquals("Миттельшпиль · Ход 14, чёрные", lines[0])
+        assertTrue(text, lines[1].startsWith("Вывод: играть Rfe8 (+0.4)"))
+        assertEquals("Оценка +0.35", lines[2])
     }
 
     @Test
@@ -49,7 +52,7 @@ class TextRendererTest {
         val text = TextRenderer.render(explanation(listOf(Section.Alternatives(emptyList()))))
 
         // Ни строкой не длиннее шапки: раздел без шагов не появляется вовсе.
-        assertEquals("Миттельшпиль · Ход 14, чёрные" + System.lineSeparator() + "Оценка +0.35", text)
+        assertEquals(3, text.lines().size)
         assertFalse(text.contains("ДРУГИЕ ХОДЫ"))
     }
 

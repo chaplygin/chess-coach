@@ -1,5 +1,6 @@
 package org.chesscoach.coach.analysis
 
+import com.github.bhlangonijr.chesslib.PieceType
 import com.github.bhlangonijr.chesslib.Side
 import org.chesscoach.coach.engine.CoachSearchLimits
 import org.chesscoach.coach.engine.EngineClient
@@ -61,6 +62,8 @@ data class ReasonDiffResult(
      * лежит ответ на вопрос «чем именно плохо».
      */
     val opponentGains: List<Fact> = emptyList(),
+    /** Вариант после разобранного хода: им объясняется, чем ход плох. */
+    val replyPv: List<String> = emptyList(),
 )
 
 /**
@@ -111,6 +114,7 @@ class ReasonDiffAnalyzer(
             moveScoreFromMover = moveScoreFromMover,
             replyMoveSan = replyUci?.let { MoveNotation.uciToSanOrRaw(fenAfterMove, listOf(it)).first() },
             opponentGains = collectOpponentGains(mover, featuresBefore, featuresAfterMove),
+            replyPv = replyLine?.pv ?: emptyList(),
         )
     }
 
@@ -167,8 +171,12 @@ class ReasonDiffAnalyzer(
         val newAtMove = afterMoveOwn.filterNot { it in beforeOwn }
         val newAtReply = afterReplyOwn.filterNot { it in afterMoveOwn }
 
-        return (newAtMove + newAtReply).distinct()
+        return (newAtMove + newAtReply).distinct().filterNot(::isPawnPin)
     }
+
+    /** Связанная пешка — обычная деталь позиции, а не причина хода. */
+    private fun isPawnPin(fact: Fact): Boolean =
+        fact is PinFact && fact.evidence.pieceAt(fact.pinned)?.pieceType == PieceType.PAWN
 
     /**
      * Профилактика проверяется буквально: та же самая проба нулевым ходом, что
@@ -195,6 +203,8 @@ class ReasonDiffAnalyzer(
         val before = measureNullMoveThreat(engineClient, fen, mainScore) ?: return null
         // Раз угрозы толком не было (просадка ниже порога), снимать нечего.
         if (before.dropCentipawns < CoachThresholds.THREAT_MIN_CP) return null
+        // Взятие без прибыли не угроза: его и снимать незачем.
+        if (before.idleCapture) return null
 
         val after = measureNullMoveThreat(engineClient, fenAfterReply, moveScoreFromMover) ?: return null
 

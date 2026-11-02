@@ -23,6 +23,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -67,6 +68,8 @@ import org.chesscoach.coach.model.ArrowStyle
 import org.chesscoach.coach.model.BoardArrow
 import org.chesscoach.coach.model.BoardMarks
 import org.chesscoach.coach.model.PositionExplanation
+import org.chesscoach.coach.model.Variation
+import org.chesscoach.coach.model.Variations
 import org.chesscoach.coach.text.TextRenderer
 import org.chesscoach.core.EvalGraph
 import org.chesscoach.core.GameReplay
@@ -156,6 +159,9 @@ fun GameReviewScreen(
     var candidateInput by remember(game.id) { mutableStateOf("") }
     var candidateVerdict by remember(game.id) { mutableStateOf<String?>(null) }
     var candidateThinking by remember(game.id) { mutableStateOf(false) }
+    var candidateVariation by remember(game.id) { mutableStateOf<Variation?>(null) }
+    // Позиция варианта, показанная на доске вместо партии. Null — доска показывает партию.
+    var variationFen by remember(game.id) { mutableStateOf<String?>(null) }
     val candidateScope = rememberCoroutineScope()
 
     val fen = currentFen(positions, currentPly)
@@ -168,6 +174,8 @@ fun GameReviewScreen(
         explanation = null
         engineError = null
         candidateVerdict = null
+        candidateVariation = null
+        variationFen = null
         candidateInput = ""
         if (positions.isEmpty()) return@LaunchedEffect
 
@@ -209,6 +217,9 @@ fun GameReviewScreen(
 
     val arrows = remember(explanation) { explanation?.let(BoardMarks::of) ?: emptyList() }
     val coachText = remember(explanation) { explanation?.let(TextRenderer::render) }
+    val variations = remember(explanation, candidateVariation) {
+        explanation?.let(Variations::of).orEmpty() + listOfNotNull(candidateVariation)
+    }
 
     LaunchedEffect(currentPly) {
         if (currentPly >= 0) movesState.animateScrollToItem(currentPly)
@@ -243,12 +254,12 @@ fun GameReviewScreen(
                 horizontalArrangement = Arrangement.spacedBy(EVAL_BAR_GAP),
             ) {
                 ChessBoard(
-                    fen = fen,
+                    fen = variationFen ?: fen,
                     modifier = Modifier.width(boardSize),
                     flipped = flipped,
-                    lastMoveFrom = positions.getOrNull(currentPly)?.fromSquare,
-                    lastMoveTo = positions.getOrNull(currentPly)?.toSquare,
-                    arrows = arrows,
+                    lastMoveFrom = positions.getOrNull(currentPly)?.fromSquare.takeIf { variationFen == null },
+                    lastMoveTo = positions.getOrNull(currentPly)?.toSquare.takeIf { variationFen == null },
+                    arrows = if (variationFen == null) arrows else emptyList(),
                 )
                 EvalBar(
                     score = evaluationsByPly[currentPly]?.scoreAfterWhite ?: advice?.scoreFromWhite,
@@ -313,6 +324,12 @@ fun GameReviewScreen(
                 error = engineError,
             )
 
+            VariationStrips(
+                variations = variations,
+                shownFen = variationFen,
+                onShow = { variationFen = it },
+            )
+
             CandidateMoveCard(
                 input = candidateInput,
                 verdict = candidateVerdict,
@@ -323,9 +340,9 @@ fun GameReviewScreen(
                     val typed = candidateInput
                     candidateScope.launch {
                         candidateThinking = true
-                        candidateVerdict = catchingNonCancellation {
-                            verdictText(container.coach.tryCandidate(fen, typed))
-                        }.getOrElse { "Не удалось проверить ход: движок недоступен." }
+                        val result = catchingNonCancellation { container.coach.tryCandidate(fen, typed) }.getOrNull()
+                        candidateVerdict = result?.let(::verdictText) ?: "Не удалось проверить ход: движок недоступен."
+                        candidateVariation = (result as? CandidateResult.Explained)?.variation
                         candidateThinking = false
                     }
                 },
@@ -388,7 +405,68 @@ private fun CandidateMoveCard(
                     color = Color(0xFF5F6368),
                 )
 
-                verdict != null -> Text(verdict, style = MaterialTheme.typography.bodyMedium)
+                verdict != null -> SelectionContainer {
+                    Text(verdict, style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Варианты разбора: нажатие на ход показывает позицию после него на доске.
+ * Прокручивается вбок, а не переносится: ход должен оставаться на своём месте.
+ */
+@Composable
+private fun VariationStrips(
+    variations: List<Variation>,
+    shownFen: String?,
+    onShow: (String?) -> Unit,
+) {
+    if (variations.isEmpty()) return
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        variations.forEach { variation ->
+            Text(variation.title, style = MaterialTheme.typography.labelMedium)
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                variation.san.forEachIndexed { index, san ->
+                    val fen = variation.fens.getOrNull(index)
+                    Text(
+                        MoveNotation.figurine(san),
+                        fontWeight = if (fen == shownFen) FontWeight.Bold else FontWeight.Normal,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(if (fen == shownFen) Color(0xFFD7E3FC) else Color(0xFFF1F3F4))
+                            .clickable { onShow(fen) }
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                    )
+                }
+            }
+        }
+        if (shownFen != null) TextButton(onClick = { onShow(null) }) { Text("Вернуться к партии") }
+    }
+}
+
+/** Текст тренера: можно выделить и скопировать, справочный блок свёрнут. */
+@Composable
+private fun CoachText(text: String) {
+    val marker = System.lineSeparator() + TextRenderer.REFERENCE_TITLE + System.lineSeparator()
+    val main = text.substringBefore(marker).trimEnd()
+    val reference = text.substringAfter(marker, "")
+    var referenceOpen by remember(text) { mutableStateOf(false) }
+
+    SelectionContainer {
+        Text(main, style = MaterialTheme.typography.bodyMedium)
+    }
+    if (reference.isNotEmpty()) {
+        TextButton(onClick = { referenceOpen = !referenceOpen }) {
+            Text(if (referenceOpen) "Скрыть термины" else "Показать термины")
+        }
+        if (referenceOpen) {
+            SelectionContainer {
+                Text(reference, style = MaterialTheme.typography.bodySmall)
             }
         }
     }
@@ -698,10 +776,7 @@ private fun AdviceCard(
                     )
 
                     when {
-                        coachText != null -> Text(
-                            coachText,
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
+                        coachText != null -> CoachText(coachText)
 
                         thinking -> Text(
                             "Тренер разбирает позицию…",

@@ -95,6 +95,7 @@ internal class LineAnalyzer(private val featureSource: FeatureSource) {
                 startFeatures.favouring(side).filter { isPositional(it) }
             }.orEmpty(),
             lineSan = MoveNotation.uciToSanOrRaw(fen, line.pv.take(SHOWN_PLIES)),
+            materialAfterLine = quietMaterial.takeIf { quietPlies > 0 },
         )
     }
 

@@ -1,12 +1,16 @@
 package org.chesscoach.coach.text
 
+import com.github.bhlangonijr.chesslib.Board
 import com.github.bhlangonijr.chesslib.Piece
 import com.github.bhlangonijr.chesslib.PieceType
 import com.github.bhlangonijr.chesslib.Side
 import com.github.bhlangonijr.chesslib.Square
 import org.chesscoach.coach.model.BackRankFact
 import org.chesscoach.coach.model.BadBishopFact
+import org.chesscoach.coach.analysis.explainsDanger
 import org.chesscoach.coach.model.CenterControlFact
+import org.chesscoach.coach.model.CheckedAdvice
+import org.chesscoach.coach.model.DevelopmentPlan
 import org.chesscoach.coach.model.CoachThresholds
 import org.chesscoach.coach.model.DevelopmentFact
 import org.chesscoach.coach.model.DiscoveredAttackFact
@@ -83,6 +87,9 @@ import java.util.Locale
  */
 object TextRenderer {
 
+    /** Заголовок справочного блока: экраны сворачивают всё, что идёт после него. */
+    const val REFERENCE_TITLE = "ТЕРМИНЫ"
+
     /** "Один-два самых весомых" — сколько фактов показываем в одном пункте причины, остальное отбрасываем. */
     private const val MAX_FACTS_PER_REASON = 2
 
@@ -135,7 +142,7 @@ object TextRenderer {
             append(body)
             appendLine()
             appendLine()
-            append("ТЕРМИНЫ")
+            append(REFERENCE_TITLE)
             footnotes.forEach { term ->
                 appendLine()
                 append("${capitalize(term.label)} — ${term.definition}.")
@@ -161,7 +168,7 @@ object TextRenderer {
 
         val title = "ВАШ ВАРИАНТ: " + SanRuFormatter.move(section.playedSan) + " — " +
             classificationLabel(section.classification) + damageMark(section)
-        return title + System.lineSeparator() + comparisonBody(section, "Лучше", "Ваш ход")
+        return title + System.lineSeparator() + moveExplanation(section, explanation.sideToMove, "Лучше", "Ваш ход")
     }
 
     // ——— Шапка ———
@@ -180,10 +187,67 @@ object TextRenderer {
 
         return listOfNotNull(
             title,
+            verdictLine(explanation),
+            worseMoveLine(explanation),
             scoreLine(explanation, played),
-            played?.let(::summaryLine),
+            // Строка "Сыгранное хуже" уже сказала то же самое с вариантом.
+            played?.takeUnless { worseMoveLine(explanation)?.startsWith(PLAYED_WORSE) == true }?.let(::summaryLine),
         ).joinToString(System.lineSeparator())
     }
+
+    /** Вывод первой строкой: что делать и почему. Остальной разбор его обосновывает. */
+    private fun verdictLine(explanation: PositionExplanation): String? {
+        if (explanation.bestMoveSan.isEmpty()) return null
+        val move = SanRuFormatter.move(explanation.bestMoveSan)
+        val score = explanation.scoreFromWhite?.let { " (" + ScoreFormat.short(it) + ")" }.orEmpty()
+        return "Вывод: играть $move$score" + verdictReason(explanation)
+    }
+
+    private fun verdictReason(explanation: PositionExplanation): String {
+        val score = explanation.scoreFromWhite
+        val moverMates = score is Score.Mate &&
+            (score.movesToMate > 0) == (explanation.sideToMove == Side.WHITE)
+        if (moverMates) return ": ведёт к мату."
+        capturedPhrase(explanation)?.let { return ": $it." }
+
+        val why = explanation.section<Section.WhyThisMove>()
+        val forked = collectAllFacts(explanation).filterIsInstance<ForkFact>().flatMap { it.targets }.toSet()
+        val first = why?.takeUnless { it.pointIsInTheLine }?.reasons?.firstNotNullOfOrNull { reason ->
+            statementsFor(reason.facts, forked, Glossary(), RenderMemory(), 1).firstOrNull()
+        }
+        return if (first != null) ": " + decapitalize(first) else ". Простой причины не нашлось, смотрите вариант ниже."
+    }
+
+    /** "берёт коня d4" — самая проверяемая причина хода. Null — лучший ход не взятие. */
+    private fun capturedPhrase(explanation: PositionExplanation): String? {
+        val uci = explanation.bestMoveUci.takeIf { it.length >= 4 } ?: return null
+        val board = Board()
+        if (!runCatching { board.loadFromFen(explanation.fen) }.isSuccess) return null
+        val target = Square.valueOf(uci.substring(2, 4).uppercase())
+        val type = board.getPiece(target).pieceType ?: return null
+        return "берёт " + PieceLexicon.name(type, GrammaticalCase.ACCUSATIVE) + " " + sq(target)
+    }
+
+    /** Ход, который хочется сыграть, и чем он хуже: сыгранный, а если он хорош, то ловушка. */
+    private fun worseMoveLine(explanation: PositionExplanation): String? {
+        val played = explanation.section<Section.PlayedMove>()
+        val punished = played != null && !played.matchesBest && isPunished(played.classification)
+        if (punished && played != null && played.lineSan.size >= 2) {
+            val score = played.scoreAfterFromWhite?.let { " (" + ScoreFormat.short(it) + ")" }.orEmpty()
+            return "$PLAYED_WORSE: " + SanRuFormatter.line(played.lineSan.take(WORSE_LINE_PLIES)) + score + "."
+        }
+        val trap = explanation.section<Section.Trap>() ?: return null
+        val score = trap.scoreFromWhite?.let { " (" + ScoreFormat.short(it) + ")" }.orEmpty()
+        return "Хуже: " + SanRuFormatter.line(listOf(trap.moveSan) + trap.refutationSan.take(WORSE_LINE_PLIES - 1)) + score + "."
+    }
+
+    private const val WORSE_LINE_PLIES = 3
+    private const val PLAYED_WORSE = "Сыгранное хуже"
+
+    private fun isPunished(classification: MoveClassification): Boolean =
+        classification == MoveClassification.BLUNDER ||
+            classification == MoveClassification.MISTAKE ||
+            classification == MoveClassification.INACCURACY
 
     private fun phaseLabel(phase: GamePhase): String = when (phase) {
         GamePhase.OPENING -> "Дебют"
@@ -324,7 +388,7 @@ object TextRenderer {
         is Section.MyPosition -> myPositionBody(section, pool, glossary, memory, forkedSquares)
         is Section.MyAttack -> myAttackBody(section, glossary, memory, forkedSquares)
         is Section.BestMoves -> bestMovesBody(section, glossary, memory, forkedSquares)
-        is Section.WhyThisMove -> whyThisMoveBody(section, glossary, memory, forkedSquares)
+        is Section.WhyThisMove -> whyThisMoveBody(section, explanation, glossary, memory, forkedSquares)
         is Section.PlayedMove -> playedMoveBody(section, explanation)
         is Section.Prophylaxis -> prophylaxisBody(section.fact, pool)
         is Section.Trap -> trapBody(section, explanation.sideToMove)
@@ -368,9 +432,18 @@ object TextRenderer {
                 parts += "Первый удар, после " + line(section.tacticLineSan) + ": " + decapitalize(statement)
             }
         }
-        if (parts.size > 1) return parts.joinToString(" ")
+        // Лишний сейчас конь может быть уже под боем: тогда перевес держится не на нём.
+        val lineMaterial = section.materialAfterLine
+        val returned = gain == null && lineMaterial != null &&
+            kotlin.math.abs(lineMaterial - section.materialNow) >= MATERIAL_EXPLAINS_CP
+        if (returned && lineMaterial != null) {
+            parts += "В варианте " + line(section.swingLineSan) + " " + materialChangePhrase(lineMaterial)
+        } else if (parts.size > 1) {
+            return parts.joinToString(" ")
+        }
 
-        val materialAhead = if (leader == Side.WHITE) section.materialNow else -section.materialNow
+        val materialBase = if (returned && lineMaterial != null) lineMaterial else section.materialNow
+        val materialAhead = if (leader == Side.WHITE) materialBase else -materialBase
         if (materialAhead >= MATERIAL_EXPLAINS_CP) {
             parts += "Перевес держится на этом материале."
             return parts.joinToString(" ")
@@ -385,6 +458,12 @@ object TextRenderer {
                 positional.joinToString(" ")
         }
         return parts.joinToString(" ")
+    }
+
+    private fun materialChangePhrase(material: Int): String = when {
+        kotlin.math.abs(material) < MATERIAL_EXPLAINS_CP -> "материал выравнивается."
+        material > 0 -> "материала больше у белых (" + pawnsLabel(material) + ")."
+        else -> "материала больше у чёрных (" + pawnsLabel(material) + ")."
     }
 
     private fun materialNowSentence(material: Int): String = when {
@@ -415,8 +494,8 @@ object TextRenderer {
         // а материал и характер позиции — уже на "как тут дела".
         section.opening?.takeIf { it.isNotBlank() }?.let { lines += "Дебют: $it." }
         lines += materialAssessmentLine(section)
-        lines += characterLine(section.character)
-        ideasLine(section.ideas)?.let { lines += it }
+        characterLine(section.character)?.let { lines += it }
+        ideasLine(section.ideas, section.developmentPlan)?.let { lines += it }
         return lines.joinToString(System.lineSeparator())
     }
 
@@ -484,15 +563,26 @@ object TextRenderer {
         return "у " + SideLexicon.name(side, GrammaticalCase.GENITIVE) + " " + spare + " " + listed
     }
 
-    private fun characterLine(character: PositionCharacter): String = when (character) {
+    /** "Полуоткрытая" ничего не подсказывает, поэтому строка только для двух явных случаев. */
+    private fun characterLine(character: PositionCharacter): String? = when (character) {
         PositionCharacter.OPEN -> "Позиция открытая: фигурам есть где развернуться."
         PositionCharacter.CLOSED -> "Позиция закрытая: пешечные цепи сцеплены, играть приходится вокруг них."
-        PositionCharacter.SEMI_OPEN -> "Позиция полуоткрытая: не нараспашку, но и не заперта наглухо."
+        PositionCharacter.SEMI_OPEN -> null
     }
 
-    private fun ideasLine(ideas: List<StrategicIdea>): String? {
-        if (ideas.isEmpty()) return null
-        return "Идея: " + ideas.joinToString(", ") { ideaPhrase(it) } + "."
+    private fun ideasLine(ideas: List<StrategicIdea>, plan: DevelopmentPlan?): String? {
+        val phrases = plan?.let(::developmentPhrases).orEmpty() + ideas.map { ideaPhrase(it) }
+        if (phrases.isEmpty()) return null
+        return "Идея: " + phrases.joinToString(", ") + "."
+    }
+
+    /** Порядок как у дебютного правила: центр, развитие, рокировка. Фигуры называются поимённо. */
+    private fun developmentPhrases(plan: DevelopmentPlan): List<String> = buildList {
+        if (plan.needsCenter) add("занять центр пешкой")
+        if (plan.undeveloped.isNotEmpty()) {
+            add("развить " + russianList(plan.undeveloped.map { namedSquare(plan.evidence, it, GrammaticalCase.ACCUSATIVE) }))
+        }
+        if (plan.castlingPending) add("сделать рокировку")
     }
 
     private fun ideaPhrase(idea: StrategicIdea): String = when (idea) {
@@ -512,9 +602,9 @@ object TextRenderer {
     // ——— ПЛАН СОПЕРНИКА / МОЙ ПЛАН ———
 
     /**
-     * Один порядок проверки на обоих планах: маты, взятия, активные ходы.
+     * Один порядок проверки на обоих планах: шахи и маты, взятия, активные ходы.
      *
-     * Все пункты печатаются всегда, даже пустые. "Маты: нет" — это ответ, а
+     * Все пункты печатаются всегда, даже пустые. "Шахи и маты: нет" — это ответ, а
      * пропущенная строка выглядит так, будто тренер про мат забыл.
      *
      * Угроза встаёт в тот пункт, к которому относится ход соперника, а король и
@@ -535,10 +625,12 @@ object TextRenderer {
         val (backRank, loose) = section.loosePieces.partition { it is BackRankFact }
         return checkList(
             mates = statementsFor(backRank, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON) +
-                threatSentences.takeIf { threatIsMate }.orEmpty(),
+                threatSentences.takeIf { threatIsMate }.orEmpty() +
+                checksSentences(section.checks),
             captures = statementsFor(loose, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON) +
                 threatSentences.takeIf { threatIsCapture }.orEmpty(),
             active = threatSentences.takeUnless { threatIsMate || threatIsCapture }.orEmpty() +
+                adviceSentences(section.advice, glossary, memory, forkedSquares) +
                 statementsFor(section.kingSafety, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON) +
                 planSentences(section.opponentPlan, glossary, forkedSquares, forOpponent = true),
             exchanges = statementsFor(section.exchanges, forkedSquares, glossary, memory, MAX_EXCHANGES),
@@ -551,24 +643,45 @@ object TextRenderer {
         memory: RenderMemory,
         forkedSquares: Set<Square>,
     ): String = checkList(
-        mates = statementsFor(section.mate, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON),
+        mates = statementsFor(section.mate, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON) +
+            checksSentences(section.checks),
         captures = statementsFor(section.captures, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON),
-        active = statementsFor(section.activity, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON) +
+        active = adviceSentences(section.advice, glossary, memory, forkedSquares) +
+            statementsFor(section.activity, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON) +
             planSentences(section.plan, glossary, forkedSquares, forOpponent = false),
         exchanges = statementsFor(section.exchanges, forkedSquares, glossary, memory, MAX_EXCHANGES),
     )
 
-    /** Размены — справка, а не пункт проверки: нет разменов, нет и строки. */
+    private fun checksSentences(checks: List<String>): List<String> {
+        if (checks.isEmpty()) return emptyList()
+        val word = if (checks.size > 1) "Шахи " else "Шах "
+        return listOf(word + checks.joinToString(", ") { SanRuFormatter.move(it) } + ".")
+    }
+
+    /** Удар следующим ходом уже проверен движком, поэтому у своих ударов есть итоговая оценка. */
+    private fun adviceSentences(
+        advice: List<CheckedAdvice>,
+        glossary: Glossary,
+        memory: RenderMemory,
+        forkedSquares: Set<Square>,
+    ): List<String> = advice.mapNotNull { item ->
+        val statement = statementsFor(listOf(item.fact), forkedSquares, glossary, memory).firstOrNull()
+            ?: return@mapNotNull null
+        val score = item.scoreFromWhite ?: return@mapNotNull statement
+        statement.removeSuffix(".") + " (оценка " + ScoreFormat.short(score) + ")."
+    }
+
+    /** Размены — справка внутри взятий, а не пункт проверки: нет разменов, нет и строки. */
     private fun checkList(
         mates: List<String>,
         captures: List<String>,
         active: List<String>,
         exchanges: List<String>,
     ): String = listOfNotNull(
-        sentencesLine("1. Маты", mates),
+        sentencesLine("1. Шахи и маты", mates),
         sentencesLine("2. Взятия", captures),
-        sentencesLine("3. Активные ходы", active),
         exchanges.takeIf { it.isNotEmpty() }?.let { sentencesLine("Размены (справочно)", it) },
+        sentencesLine("3. Активные ходы", active),
     ).joinToString(System.lineSeparator())
 
     /**
@@ -615,14 +728,7 @@ object TextRenderer {
             parts += lead + statements.joinToString("; ") { decapitalize(it.removeSuffix(".")) } + "."
         }
 
-        // Без конкретики остаётся только мера движка. Называем её в пешках, а не
-        // "потерей ладьи": ладья под боем может и не стоять.
-        if (dangers.isEmpty() &&
-            threat.dropCentipawns in CoachThresholds.THREAT_STRONG_CP until COLLAPSE_CP
-        ) {
-            val pawns = (threat.dropCentipawns + 50) / 100
-            parts += "Оценка упадёт примерно на $pawns ${pawnsWord(pawns)}."
-        }
+        if (threat.lineSan.size >= 2) parts += "Вариант: " + SanRuFormatter.line(threat.lineSan) + "."
 
         return parts
     }
@@ -681,13 +787,6 @@ object TextRenderer {
         { t -> "Без ответа ${SideLexicon.name(t.favours)} тут же играют ${SanRuFormatter.move(t.opponentMoveSan)}." },
     )
 
-    private fun explainsDanger(fact: Fact): Boolean = when (fact) {
-        is HangingPieceFact, is TrappedPieceFact, is ForkFact, is PinFact, is SkewerFact,
-        is DiscoveredAttackFact, is BackRankFact, is OverloadedDefenderFact, is MateFact,
-        -> true
-        else -> false
-    }
-
     // ——— ЛУЧШИЙ ХОД ———
 
     private fun bestMovesBody(
@@ -698,8 +797,7 @@ object TextRenderer {
     ): String? {
         if (section.computerLineSan.isEmpty()) return null
         val computer = "Компьютер: " + SanRuFormatter.line(section.computerLineSan) + "."
-        val human = section.human
-            ?: return computer + System.lineSeparator() + "Человек: тот же ход."
+        val human = section.human ?: return computer
 
         val why = statementsFor(human.facts, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON)
             .ifEmpty { listOf("Ход заметен сразу и почти не уступает лучшему.") }
@@ -711,11 +809,17 @@ object TextRenderer {
 
     private fun whyThisMoveBody(
         section: Section.WhyThisMove,
+        explanation: PositionExplanation,
         glossary: Glossary,
         memory: RenderMemory,
         forkedSquares: Set<Square>,
     ): String? {
-        val lines = section.reasons.mapNotNull { reasonSentence(it, glossary, memory, forkedSquares) }
+        // Взятие — самая прямая причина хода, а детекторы смотрят только на то, что появилось после него.
+        val captured = capturedPhrase(explanation)
+            ?.takeIf { section.moveSan == explanation.bestMoveSan }
+            ?.let { capitalize(it) + "." }
+        val lines = listOfNotNull(captured) +
+            section.reasons.mapNotNull { reasonSentence(it, glossary, memory, forkedSquares) }
         if (lines.isEmpty() && !section.pointIsInTheLine) return null
 
         // Нумеруем после фильтрации, а не до: пункт, который весь оказался
@@ -725,7 +829,7 @@ object TextRenderer {
         // Признаки молчат, а ход всё равно заметно сильнее остальных. Выдавать
         // в таком случае открытую линию за причину отдать ладью — значит
         // соврать уверенным тоном, поэтому отсылаем к варианту.
-        val caveat = if (section.pointIsInTheLine) {
+        val caveat = if (section.pointIsInTheLine && captured == null) {
             listOf("Одними признаками позиции этот ход не объясняется — его смысл раскрывается в варианте ниже.")
         } else {
             emptyList()
@@ -800,27 +904,49 @@ object TextRenderer {
             return "Сыгран лучший ход."
         }
 
-        val body = comparisonBody(section, "Лучше было", "Сыгранный ход")
-        val question = lessonQuestion(section) ?: return body
-        return body + System.lineSeparator() + "Вопрос на будущее: " + question
+        return moveExplanation(section, explanation.sideToMove, "Лучше было", "Сыгранный ход")
     }
 
-    /** Привычка, которая поймала бы эту ошибку. Зависит от того, чем соперник наказывает. */
-    private fun lessonQuestion(section: Section.PlayedMove): String? {
-        if (section.classification != MoveClassification.BLUNDER &&
-            section.classification != MoveClassification.MISTAKE
-        ) {
-            return null
+    /**
+     * Полный ответ про ход: итоговые оценки, вариант и причина. Одинаков для
+     * сыгранного хода и своего варианта: это один и тот же вопрос.
+     */
+    private fun moveExplanation(
+        section: Section.PlayedMove,
+        mover: Side,
+        betterPrefix: String,
+        subject: String,
+    ): String = listOfNotNull(
+        moveScoresLine(section),
+        section.lineSan.takeIf { it.size >= 2 }?.let { "Вариант: " + SanRuFormatter.line(it) + "." },
+        moveReasonLine(section, mover),
+        comparisonBody(section, betterPrefix, subject),
+    ).joinToString(System.lineSeparator())
+
+    private fun moveScoresLine(section: Section.PlayedMove): String? {
+        val after = section.scoreAfterFromWhite ?: return null
+        val best = section.bestScoreFromWhite ?: return null
+        return "Оценка после хода: " + ScoreFormat.short(after) + ". После лучшего " +
+            SanRuFormatter.move(section.bestSan) + ": " + ScoreFormat.short(best) + "."
+    }
+
+    /** Причина из материала варианта и новых ударов соперника. Нет ни того, ни другого — так и пишем. */
+    private fun moveReasonLine(section: Section.PlayedMove, mover: Side): String? {
+        if (!isPunished(section.classification)) return null
+        val parts = mutableListOf<String>()
+        val swing = section.materialSwing ?: 0
+        val dangers = section.punishment.filter(::explainsDanger).sortedBy(::damageRank)
+        parts += statementsFor(dangers, emptySet(), Glossary(), RenderMemory(), MAX_FACTS_PER_REASON)
+            .map { "после хода: " + decapitalize(it) }
+        val lineEnd = listOfNotNull(
+            materialGainWord(-swing)?.let { SideLexicon.name(mover) + " теряют " + it },
+        ) + statementsFor(section.lineGains, emptySet(), Glossary(), RenderMemory(), MAX_FACTS_PER_REASON)
+            .map { decapitalize(it.removeSuffix(".")) }
+        if (lineEnd.isNotEmpty()) parts += "к концу варианта " + lineEnd.joinToString("; ") + "."
+        if (parts.isEmpty()) {
+            return "Почему: конкретной причины я не нашёл, оценка опирается на вариант выше."
         }
-        return when (section.punishment.minByOrNull(::damageRank)) {
-            is MateFact, is BackRankFact -> "есть ли у соперника шах или мат в ответ на мой ход?"
-            is ForkFact -> "может ли соперник напасть одной фигурой сразу на две мои?"
-            is PinFact, is SkewerFact -> "что стоит за моей фигурой на линии, и что на самом деле защищено?"
-            is DiscoveredAttackFact -> "какие линии откроются, если фигура соперника уйдёт с места?"
-            is HangingPieceFact, is TrappedPieceFact, is OverloadedDefenderFact ->
-                "что останется без защиты после этого хода?"
-            else -> "что изменил последний ход соперника и что он теперь грозит сделать?"
-        }
+        return "Почему: " + parts.first() + parts.drop(1).joinToString("") { " " + capitalize(it) }
     }
 
     /**
@@ -856,12 +982,13 @@ object TextRenderer {
             .distinct()
             .take(MAX_FACTS_PER_REASON)
 
-        if (missedPhrases.isEmpty()) return betterLine + refutationSentence(section)
+        // Вариант уже назвал ответ соперника, повторять его незачем.
+        val reply = if (section.lineSan.size >= 2) "" else refutationSentence(section)
+        if (missedPhrases.isEmpty()) return betterLine + reply
 
         // Запятые без союза: сама именная группа уже может содержать "и"
         // ("вилку на d1 и e2"), и обычное перечисление дало бы "и e2 и связку".
-        return betterLine + " " + subject + " упускает " + missedPhrases.joinToString(", ") + "." +
-            refutationSentence(section)
+        return betterLine + " " + subject + " упускает " + missedPhrases.joinToString(", ") + "." + reply
     }
 
     /**
@@ -1046,7 +1173,8 @@ object TextRenderer {
     private fun trapBody(section: Section.Trap, mover: Side): String {
         val moveRu = SanRuFormatter.move(section.moveSan)
         val refutationRu = SanRuFormatter.line(section.refutationSan)
-        return "$moveRu выглядит естественно, но после $refutationRu ${verdictPhrase(section.verdict, mover)}."
+        val score = section.scoreFromWhite?.let { " (оценка " + ScoreFormat.short(it) + ")" }.orEmpty()
+        return "$moveRu выглядит естественно, но после $refutationRu ${verdictPhrase(section.verdict, mover)}$score."
     }
 
     private fun verdictPhrase(verdict: MaterialVerdict, mover: Side): String = when (verdict) {
@@ -1093,12 +1221,13 @@ object TextRenderer {
         when (section) {
             is Section.EvalReason, is Section.PositionAssessment -> emptyList()
             is Section.MyPosition ->
-                section.kingSafety + section.loosePieces + section.exchanges +
+                section.kingSafety + section.loosePieces + section.exchanges + section.advice.map { it.fact } +
                     section.opponentPlan.flatMap { it.facts } +
                     (section.threat?.consequences ?: emptyList())
 
             is Section.MyAttack ->
-                section.mate + section.captures + section.activity + section.exchanges + section.plan.flatMap { it.facts }
+                section.mate + section.captures + section.activity + section.exchanges +
+                    section.advice.map { it.fact } + section.plan.flatMap { it.facts }
 
             is Section.WhyThisMove -> section.reasons.flatMap { it.facts }
             is Section.PlayedMove -> section.missed + section.punishment
@@ -1182,7 +1311,11 @@ object TextRenderer {
         is ExchangeFact -> {
             val attacker = capitalize(namedSquare(fact.evidence, fact.attacker, GrammaticalCase.NOMINATIVE))
             val victim = namedSquare(fact.evidence, fact.square, GrammaticalCase.ACCUSATIVE)
-            "$attacker берёт $victim, дельта ${pawnsLabel(fact.deltaCentipawns)}."
+            if (fact.lineSan.isEmpty()) {
+                "$attacker берёт $victim, дельта ${pawnsLabel(fact.deltaCentipawns)}."
+            } else {
+                exchangeStatement(fact)
+            }
         }
 
         is TrappedPieceFact -> {
@@ -1351,7 +1484,7 @@ object TextRenderer {
         is ForkThreatFact -> {
             val name = capitalize(PieceLexicon.name(pieceTypeOf(fact.piece)))
             val targets = russianList(fact.targets.map { namedSquare(fact.evidence, it, GrammaticalCase.ACCUSATIVE) })
-            "$name с ${sq(fact.from)} может пойти на ${sq(fact.to)} и напасть сразу на $targets."
+            "$name с ${sq(fact.from)} может пойти на ${sq(fact.to)} и напасть сразу на $targets" + forkTradeClause(fact) + "."
         }
 
         is RemoveDefenderFact -> {
@@ -1366,9 +1499,55 @@ object TextRenderer {
                 "пешкой уже не прикрыть, и соперник на него смотрит."
         }
 
-        is PawnBreakFact -> "Пешечный удар ${sq(fact.from)}-${sq(fact.to)}: пешка нападает на пешку ${sq(fact.target)} и вскрывает игру."
+        is PawnBreakFact -> {
+            val targets = (listOf(fact.target) + fact.alsoAttacks).sortedByDescending { square ->
+                fact.evidence.pieceAt(square)?.pieceType?.let(SeeCalculator::value) ?: 0
+            }
+            val named = russianList(targets.map { namedSquare(fact.evidence, it, GrammaticalCase.ACCUSATIVE) })
+            "Пешечный удар ${sq(fact.from)}-${sq(fact.to)}: пешка нападает на $named и вскрывает игру."
+        }
 
         is EndgameFact -> endgameStatement(fact)
+    }
+
+    /** "Nxf5 Qxf5: конь за слона, материал +0.1 в пользу белых." */
+    private fun exchangeStatement(fact: ExchangeFact): String {
+        val line = SanRuFormatter.line(fact.lineSan)
+        val attacker = fact.evidence.pieceAt(fact.attacker)
+        val victim = fact.evidence.pieceAt(fact.square)
+        val swap = if (fact.lineSan.size == 2 && attacker != null && victim != null) {
+            PieceLexicon.name(pieceTypeOf(attacker)) + " за " +
+                PieceLexicon.name(pieceTypeOf(victim), GrammaticalCase.ACCUSATIVE) + ", "
+        } else {
+            ""
+        }
+        return "$line: $swap" + materialBalance(fact.deltaCentipawns, fact.favours) + "."
+    }
+
+    /** Разница в материале с названной стороной: само число не говорит, за кого оно. */
+    private fun materialBalance(deltaForCapturer: Int, capturer: Side): String {
+        if (deltaForCapturer == 0) return "материал равный"
+        val side = if (deltaForCapturer > 0) capturer else capturer.flip()
+        val pawns = String.format(Locale.ROOT, "%.1f", kotlin.math.abs(deltaForCapturer) / 100.0)
+        return "материал +$pawns в пользу " + SideLexicon.name(side, GrammaticalCase.GENITIVE)
+    }
+
+    /** ", но Qxg4 Bxg4 — размен ферзей": равный размен снимает вилку. Пусто, если фигуру не бьют. */
+    private fun forkTradeClause(fact: ForkThreatFact): String {
+        if (fact.tradeLineSan.isEmpty()) return ""
+        val line = SanRuFormatter.line(fact.tradeLineSan)
+        val same = fact.tradedBy?.pieceType == fact.piece.pieceType
+        val plural = when (fact.piece.pieceType) {
+            PieceType.QUEEN -> "ферзей"
+            PieceType.ROOK -> "ладей"
+            PieceType.BISHOP -> "слонов"
+            PieceType.KNIGHT -> "коней"
+            else -> null
+        }
+        val trade = if (same && plural != null) "размен $plural" else "размен"
+        // Равный размен в скобках не нуждается: важна итоговая оценка, она стоит рядом.
+        val balance = if (fact.tradeDeltaCentipawns == 0) "" else " (" + materialBalance(fact.tradeDeltaCentipawns, fact.favours.flip()) + ")"
+        return ", но $line — $trade$balance"
     }
 
     private fun endgameStatement(fact: EndgameFact): String {
@@ -1400,7 +1579,19 @@ object TextRenderer {
         // взять обратно есть чем, но размен всё равно проигран, и советовать
         // "защити фигуру" было бы вредным советом.
         val verdict = if (fact.defended) "взять обратно невыгодно" else "защиты нет"
-        return " (бьёт $attackerName ${sq(attacker)}, $verdict)"
+        val why = recaptureWhy(fact) ?: return " (бьёт $attackerName ${sq(attacker)}, $verdict)"
+        return " (бьёт $attackerName ${sq(attacker)}; $why)"
+    }
+
+    /** Почему нельзя взять обратно: ходами, а не приговором. Null — ходов не записано. */
+    private fun recaptureWhy(fact: HangingPieceFact): String? {
+        val line = fact.recaptureLineSan
+        val recapture = line.getOrNull(1)?.let { SanRuFormatter.move(it) } ?: return null
+        val reply = line.getOrNull(2)?.let { SanRuFormatter.move(it) }
+            ?: return "взять обратно $recapture можно, но это размен в минус"
+        val piece = fact.recapturer?.pieceType ?: return "если взять обратно $recapture, то $reply"
+        val lost = if (PieceLexicon.genderOf(piece) == Gender.MASCULINE) "потерян" else "потеряна"
+        return "если взять обратно $recapture, то $reply и " + PieceLexicon.name(piece) + " " + lost
     }
 
     private fun pieceTypeOf(piece: Piece) =
@@ -1439,7 +1630,8 @@ object TextRenderer {
         text.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
 
     private fun decapitalize(text: String): String =
-        text.replaceFirstChar { if (it.isUpperCase()) it.lowercase() else it.toString() }
+        // Латинская заглавная — это запись хода: nxf5 вместо Nxf5 был бы другой ход.
+        text.replaceFirstChar { if (it.isUpperCase() && it !in 'A'..'Z') it.lowercase() else it.toString() }
 
     /** Русское согласование числительного мата: 1 ход, 2–4 хода, 5+ ходов (и 11–14 — тоже "ходов"). */
     private fun movesWord(n: Int): String {
@@ -1450,17 +1642,6 @@ object TextRenderer {
             mod10 == 1 -> "ход"
             mod10 in 2..4 -> "хода"
             else -> "ходов"
-        }
-    }
-
-    private fun pawnsWord(n: Int): String {
-        val mod100 = kotlin.math.abs(n) % 100
-        val mod10 = mod100 % 10
-        return when {
-            mod100 in 11..14 -> "пешек"
-            mod10 == 1 -> "пешку"
-            mod10 in 2..4 -> "пешки"
-            else -> "пешек"
         }
     }
 }

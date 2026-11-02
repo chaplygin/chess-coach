@@ -99,11 +99,16 @@ data class HangingPieceFact(
     val firstAttacker: Square? = null,
     /** Есть ли чем взять обратно после первого взятия. */
     val defended: Boolean = false,
+    /** Что будет, если взять обратно: первое взятие, ответ и продолжение размена. */
+    val recaptureLineSan: List<String> = emptyList(),
+    /** Фигура, которой пришлось бы брать обратно. */
+    val recapturer: Piece? = null,
 ) : Fact
 
 /**
  * Почти равный размен: [attacker] может взять на [square], и материал почти не
  * меняется. [deltaCentipawns] со знаком, с точки зрения того, кто берёт первым.
+ * [lineSan] — весь размен: первое взятие без ответа рассказывало бы полдела.
  */
 data class ExchangeFact(
     val square: Square,
@@ -111,6 +116,7 @@ data class ExchangeFact(
     val deltaCentipawns: Int,
     override val favours: Side,
     override val evidence: Evidence,
+    val lineSan: List<String> = emptyList(),
 ) : Fact
 
 data class ForkFact(
@@ -284,7 +290,12 @@ data class CenterControlFact(
     override val evidence: Evidence,
 ) : Fact
 
-/** Вилки ещё нет, но фигура может встать на [to] и напасть сразу на [targets]: проверено ходом на копии доски. */
+/**
+ * Вилки ещё нет, но фигура может встать на [to] и напасть сразу на [targets]: проверено ходом на копии доски.
+ *
+ * [tradeLineSan] — фигуру там сразу меняют: равный размен снимает вилку, хотя
+ * материал и не теряется. [tradeDeltaCentipawns] — итог для того, кто взял первым.
+ */
 data class ForkThreatFact(
     val from: Square,
     val to: Square,
@@ -292,6 +303,10 @@ data class ForkThreatFact(
     val targets: List<Square>,
     override val favours: Side,
     override val evidence: Evidence,
+    val tradeLineSan: List<String> = emptyList(),
+    val tradeDeltaCentipawns: Int = 0,
+    /** Кем берут фигуру на [to]: одинаковые фигуры называем "разменом ферзей". */
+    val tradedBy: Piece? = null,
 ) : Fact
 
 /** Взятие [defender] не проигрывает материал и оставляет [target] под выгодным боем другой фигуры. */
@@ -311,7 +326,10 @@ data class WeakSquareFact(
     override val evidence: Evidence,
 ) : Fact
 
-/** Ход пешкой, которая безопасно нападает на пешку соперника и вскрывает игру. */
+/**
+ * Ход пешкой, которая безопасно нападает на пешку соперника и вскрывает игру.
+ * [alsoAttacks] — другие цели той же пешки: удар по коню важнее удара по пешке.
+ */
 data class PawnBreakFact(
     val from: Square,
     val to: Square,
@@ -319,6 +337,7 @@ data class PawnBreakFact(
     val owner: Side,
     override val favours: Side,
     override val evidence: Evidence,
+    val alsoAttacks: List<Square> = emptyList(),
 ) : Fact
 
 enum class EndgameKind { ROOK_BEHIND_PASSED, KING_OUTSIDE_SQUARE, ACTIVE_KING, OPPOSITE_BISHOPS }
@@ -348,6 +367,8 @@ data class ThreatFact(
     val consequences: List<Fact>,
     override val favours: Side,
     override val evidence: Evidence,
+    /** Продолжение угрозы: ход без варианта проверить нечем. */
+    val lineSan: List<String> = emptyList(),
 ) : Fact
 
 /** Ход снял ту самую угрозу: проверено повторным нулевым ходом после него. */

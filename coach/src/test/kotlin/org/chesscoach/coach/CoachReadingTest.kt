@@ -19,6 +19,12 @@ class CoachReadingTest {
     private companion object {
         const val REAL_GAME_FEN = "r1bqk2r/ppp2ppp/2n2n2/b2pp3/3PPP2/P1N5/1PP1N1PP/R1BQKB1R w KQkq - 1 7"
         const val REAL_GAME_MOVE = "c1e3"
+
+        /** Позиция, сыгранный ход и ход, который человек проверяет сам. */
+        val USER_POSITIONS = listOf(
+            Triple("r1b1k1nr/pppq2pp/2nb4/3pp1B1/8/2NBP3/PPPN1PPP/R2QK2R b KQkq - 0 9", "g8f6", "d4"),
+            Triple("r3kb1r/ppp3pp/5p2/3Ppb2/2PNq3/8/PP2BPPP/R1BQ1RK1 b kq - 0 10", "e5d4", "Qxd4"),
+        )
     }
 
     @Test
@@ -27,7 +33,6 @@ class CoachReadingTest {
         assumeTrue("нет CHESSCOACH_STOCKFISH, пропускаю", binary != null)
 
         val fixtures = PuzzleFixtures.load()
-        assumeTrue("нет собранных фикстур, пропускаю", fixtures.isNotEmpty())
 
         LocalStockfishClient(binary!!).use { engine ->
             val coach = CoachEngine(engine)
@@ -35,6 +40,18 @@ class CoachReadingTest {
                 // Позиция из настоящей партии: на ней отрабатывался формат текста.
                 println("=".repeat(72))
                 println(coach.explainAsText(REAL_GAME_FEN, REAL_GAME_MOVE))
+
+                // Позиции, на которых пользователь поймал тренера на ошибках.
+                USER_POSITIONS.forEach { (fen, move, candidate) ->
+                    println()
+                    println("=".repeat(72))
+                    println("FEN: $fen, сыгран $move")
+                    val started = System.currentTimeMillis()
+                    println(coach.explainAsText(fen, move))
+                    println("[разбор занял " + (System.currentTimeMillis() - started) + " мс]")
+                    println()
+                    println((coach.tryCandidate(fen, candidate) as? CandidateResult.Explained)?.text)
+                }
 
                 // По одной задаче на тему: смотреть шесть однотипных вилок
                 // бесполезно, а рентген и последняя горизонталь звучат иначе.

@@ -162,7 +162,8 @@ class TextRendererEditorialTest {
         // важнее, чем экономия одной строки.
         assertTrue(text, text.contains("ПЛАН СОПЕРНИКА"))
         assertTrue(text, text.contains("3. Активные ходы: нет."))
-        assertEquals(1, Regex("под давлением").findAll(text).count())
+        // Первая строка "Вывод" пересказывает главную причину: это сводка, а не повтор раздела.
+        assertEquals(1, Regex("под давлением").findAll(text.substringAfter("ПОЧЕМУ")).count())
     }
 
     // ——— Редакторская сдержанность (пункт 3 правки) ———
@@ -181,7 +182,7 @@ class TextRendererEditorialTest {
 
         val text = TextRenderer.render(explanation(listOf(reasonSection(*facts.toTypedArray()))))
 
-        val whyThisMove = text.substringAfter("ЛУЧШИЙ ХОД")
+        val whyThisMove = text.substringAfter("ПОЧЕМУ")
         assertEquals(2, Regex("под боем").findAll(whyThisMove).count())
     }
 
@@ -357,7 +358,7 @@ class TextRendererEditorialTest {
         )
 
         val text = TextRenderer.render(explanation(listOf(reasonSection(opponentKing, ownKing))))
-        val whyThisMove = text.substringAfter("ЛУЧШИЙ ХОД")
+        val whyThisMove = text.substringAfter("ПОЧЕМУ")
 
         assertEquals(1, Regex("Король").findAll(whyThisMove).count())
         assertTrue(whyThisMove, whyThisMove.contains("Король белых на h7"))

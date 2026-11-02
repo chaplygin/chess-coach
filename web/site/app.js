@@ -1,6 +1,6 @@
 // Страница разбора партий. Вся логика тренера живёт в coach.js (собран из :core
 // и :coach), здесь только экран, вход в Lichess и общение с движком.
-import { classify, explain, replay, terminalScore, tryCandidate } from "./coach.js";
+import { classify, errorReport, explain, replay, terminalScore, tryCandidate } from "./coach.js";
 import { Engine } from "./engine.js";
 
 const LICHESS = "https://lichess.org";
@@ -168,6 +168,28 @@ function toGame(raw, username) {
 }
 
 const OUTCOME_TEXT = { WIN: "Победа", LOSS: "Поражение", DRAW: "Ничья" };
+const REFERENCE_TITLE = "ТЕРМИНЫ";
+
+// Сводка считается только по партиям, которые уже разобраны на этом устройстве.
+function reportPayload(games) {
+  return games.map((game) => {
+    const evaluations = parseEvaluations(store.get("analysis:" + game.id) || "");
+    if (!evaluations.length) return null;
+    return [game.myColor, game.moves, game.initialFen, evaluations.map((e) => e.cls).join(",")].join("|");
+  }).filter(Boolean).join("~");
+}
+
+function showReport(games) {
+  const box = h("div", { class: "coach" }, "Считаю…");
+  app.replaceChildren(
+    h("button", { onclick: showGames }, "← К партиям"),
+    h("h2", { style: "margin-top:12px" }, "Мои ошибки"),
+    box,
+  );
+  errorReport(reportPayload(games), (text, _marks, error) => {
+    box.textContent = error ? "Не удалось собрать сводку: " + error : text;
+  });
+}
 
 async function showGames() {
   renderAccount();
@@ -188,6 +210,7 @@ async function showGames() {
     }
     app.replaceChildren(
       h("h2", {}, "Партии " + username),
+      h("div", { class: "row" }, h("button", { onclick: () => showReport(games) }, "Мои ошибки")),
       h("ul", { class: "games" }, games.map((game) => h("li", {},
         h("button", { onclick: () => showReview(game) },
           h("span", {}, "против " + game.opponent + (game.rating ? " (" + game.rating + ")" : "")),
@@ -240,6 +263,24 @@ function scoreToken(infoLines) {
   const at = tokens.indexOf("score");
   if (at < 0) return "";
   return tokens[at + 1] + ":" + tokens[at + 2];
+}
+
+function parseVariations(text) {
+  return (text || "").split(";").filter(Boolean).map((row) => {
+    const f = row.split("|");
+    return { title: f[0], fens: f[1].split(","), san: f[2].split(" ") };
+  });
+}
+
+// Текст тренера: справочный блок свёрнут, чтобы не заслонять разбор.
+function coachBlock(text, waiting) {
+  const marker = NEWLINE + REFERENCE_TITLE + NEWLINE;
+  const at = text.indexOf(marker);
+  if (at < 0) return h("div", { class: "coach" + (waiting ? " wait" : "") }, text);
+  return h("div", { class: "coach" + (waiting ? " wait" : "") },
+    text.slice(0, at).trimEnd(),
+    h("details", {}, h("summary", {}, "Термины"), text.slice(at + marker.length)),
+  );
 }
 
 function bridge(guard) {
@@ -386,6 +427,9 @@ function showReview(game) {
   let candidateText = "";
   let coachWaiting = false;
   let arrows = [];
+  let variations = [];
+  // Показанный ход варианта: { line, step }. Пока он задан, доска показывает вариант, а не партию.
+  let shown = null;
   let request = 0;
   let closed = false;
   let timer = null;
@@ -395,6 +439,8 @@ function showReview(game) {
   function goTo(next) {
     ply = Math.max(0, Math.min(positions.length, next));
     arrows = [];
+    variations = [];
+    shown = null;
     render();
     clearTimeout(timer);
     // Пауза, чтобы быстрое перелистывание не ставило движку очередь из позиций.
@@ -410,7 +456,9 @@ function showReview(game) {
       if (token !== request || closed) return;
       coachWaiting = false;
       coachText = error ? "Не удалось разобрать позицию: " + error : text;
-      arrows = (marks || "").split(";").filter(Boolean).map((item) => {
+      const [arrowText, variationText] = (marks || "").split("~");
+      variations = parseVariations(variationText);
+      arrows = (arrowText || "").split(";").filter(Boolean).map((item) => {
         const [uci, style] = item.split(":");
         return { uci, style };
       });
@@ -425,10 +473,12 @@ function showReview(game) {
     coachWaiting = true;
     coachText = "Считаю ход " + typed + "…";
     render();
-    tryCandidate(fenAt(ply), typed, bridge(() => token === request && !closed), (text, _marks, error) => {
+    tryCandidate(fenAt(ply), typed, bridge(() => token === request && !closed), (text, marks, error) => {
       if (token !== request || closed) return;
       coachWaiting = false;
       coachText = error ? "Не удалось разобрать ход: " + error : text;
+      variations = parseVariations(marks);
+      shown = null;
       render();
     });
   }
@@ -495,7 +545,9 @@ function showReview(game) {
     const usedStyles = [...new Set(arrows.map((a) => a.style))];
     const left = h("div", {},
       h("div", { class: "board-row" },
-        drawBoard(fenAt(ply), flipped, ply > 0 ? positions[ply - 1].uci : "", arrows),
+        shown
+          ? drawBoard(variations[shown.line].fens[shown.step], flipped, "", [])
+          : drawBoard(fenAt(ply), flipped, ply > 0 ? positions[ply - 1].uci : "", arrows),
         drawEvalBar(ply > 0 ? evaluations[ply - 1] : null, flipped),
       ),
       usedStyles.length ? h("div", { class: "legend" }, usedStyles.map((style) => h("span", {},
@@ -522,7 +574,14 @@ function showReview(game) {
         h("button", { class: "primary", onclick: runScan }, "Разобрать ещё раз"),
       ) : null,
       moveList,
-      h("div", { class: "coach" + (coachWaiting ? " wait" : "") }, coachText),
+      coachBlock(coachText, coachWaiting),
+      variations.length ? h("div", { class: "variations" }, variations.map((variation, line) => h("div", { class: "variation" },
+        h("span", { class: "note" }, variation.title + ":"),
+        variation.san.map((san, step) => h("button", {
+          class: shown && shown.line === line && shown.step === step ? "on" : "",
+          onclick: () => { shown = { line, step }; render(); },
+        }, figurine(san))),
+      )), shown ? h("button", { onclick: () => { shown = null; render(); } }, "Вернуться к партии") : null) : null,
       h("form", {
         class: "row",
         onsubmit: (event) => { event.preventDefault(); submitCandidate(candidate.value); },

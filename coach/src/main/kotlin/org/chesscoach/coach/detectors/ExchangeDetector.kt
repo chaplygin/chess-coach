@@ -38,6 +38,7 @@ class ExchangeDetector : Detector {
                 deltaCentipawns = delta,
                 favours = attacker,
                 evidence = Evidence.onBoard(board, square, first.from),
+                lineSan = SeeCalculator.exchangeLineSan(board, square, attacker),
             )
         }
 

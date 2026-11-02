@@ -104,7 +104,7 @@ class TextRendererNewSectionsTest {
         // Список пунктов одинаков от позиции к позиции: иначе читатель не
         // знает, что тренер проверил, а что молча пропустил.
         assertTrue(text, text.contains("ПЛАН СОПЕРНИКА"))
-        assertTrue(text, text.contains("1. Маты: нет."))
+        assertTrue(text, text.contains("1. Шахи и маты: нет."))
         assertTrue(text, text.contains("2. Взятия: нет."))
         assertTrue(text, text.contains("3. Активные ходы: король"))
     }
@@ -114,7 +114,7 @@ class TextRendererNewSectionsTest {
         val text = TextRenderer.render(explanation(listOf(Section.MyPosition(emptyList(), emptyList()))))
 
         assertTrue(text, text.contains("ПЛАН СОПЕРНИКА"))
-        assertTrue(text, text.contains("1. Маты: нет."))
+        assertTrue(text, text.contains("1. Шахи и маты: нет."))
         assertTrue(text, text.contains("2. Взятия: нет."))
         assertTrue(text, text.contains("3. Активные ходы: нет."))
     }
@@ -193,11 +193,11 @@ class TextRendererNewSectionsTest {
     }
 
     @Test
-    fun `a threat with nothing concrete gives the engine measure in pawns`() {
+    fun `a threat never reports how much the score would drop after a skipped move`() {
         val threat = threat("Ng4", "f6g4", 500, emptyList())
         val text = TextRenderer.render(explanation(listOf(Section.MyPosition(emptyList(), emptyList(), threat))))
 
-        assertTrue(text, text.contains("Оценка упадёт примерно на 5 пешек."))
+        assertFalse(text, text.contains("Оценка упадёт"))
     }
 
     // ——— МОЙ ПЛАН ———
@@ -226,7 +226,7 @@ class TextRendererNewSectionsTest {
         val text = TextRenderer.render(explanation(listOf(Section.MyAttack(emptyList(), emptyList(), emptyList()))))
 
         assertTrue(text, text.contains("МОЙ ПЛАН"))
-        assertTrue(text, text.contains("1. Маты: нет."))
+        assertTrue(text, text.contains("1. Шахи и маты: нет."))
         assertTrue(text, text.contains("2. Взятия: нет."))
         assertTrue(text, text.contains("3. Активные ходы: нет."))
     }
@@ -251,7 +251,7 @@ class TextRendererNewSectionsTest {
         assertTrue(text, text.contains("Оценка после хода Nd4: +3.2 (дельта +2.9)"))
         assertTrue(text, text.contains("Оценка была бы после лучшего хода Rfe8: +0.4 (дельта была бы 0.0)"))
         assertTrue(text, text.contains("Коротко: Nd4 — зевок"))
-        assertTrue(text, text.contains("Вопрос на будущее:"))
+        assertFalse(text, text.contains("Вопрос на будущее"))
     }
 
     @Test
@@ -277,7 +277,7 @@ class TextRendererNewSectionsTest {
 
         assertTrue(text, text.contains("ЛУЧШИЙ ХОД"))
         assertTrue(text, text.contains("Компьютер: Rfe8 Bd3."))
-        assertTrue(text, text.contains("Человек: тот же ход"))
+        assertFalse(text, text.contains("Человек"))
     }
 
     @Test

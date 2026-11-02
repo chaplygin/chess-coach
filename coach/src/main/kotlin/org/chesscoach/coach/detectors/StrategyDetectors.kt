@@ -94,13 +94,16 @@ class PawnBreakDetector : Detector {
                 if (hit == null || SeeCalculator.evaluateSquare(after, move.to, opponent) > 0) {
                     null
                 } else {
+                    val others = Bitboard.bbToSquareList(AttackMap.attacksFrom(after, move.to) and after.getBitboard(opponent))
+                        .filter { it != hit && after.getPiece(it).pieceType != PieceType.KING }
                     PawnBreakFact(
                         from = move.from,
                         to = move.to,
                         target = hit,
                         owner = side,
                         favours = side,
-                        evidence = Evidence.onBoard(board, move.from, hit),
+                        evidence = Evidence.onBoard(board, move.from, hit, *others.toTypedArray()),
+                        alsoAttacks = others,
                     )
                 }
             }

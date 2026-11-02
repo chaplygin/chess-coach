@@ -1,5 +1,8 @@
 package org.chesscoach.coach
 
+import org.chesscoach.coach.analysis.AnalyzedGame
+import org.chesscoach.coach.analysis.ErrorReport
+import org.chesscoach.coach.analysis.ErrorReportBuilder
 import org.chesscoach.coach.analysis.PipelineOrchestrator
 import org.chesscoach.coach.detectors.BackRankDetector
 import org.chesscoach.coach.detectors.DevelopmentDetector
@@ -22,6 +25,8 @@ import org.chesscoach.coach.detectors.PinSkewerDetector
 import org.chesscoach.coach.detectors.TrappedPieceDetector
 import org.chesscoach.coach.engine.EngineClient
 import org.chesscoach.coach.model.PositionExplanation
+import org.chesscoach.coach.model.Variation
+import org.chesscoach.coach.model.Variations
 import org.chesscoach.coach.text.TextRenderer
 import org.chesscoach.core.MoveInput
 import org.chesscoach.core.MoveInputResult
@@ -35,7 +40,12 @@ import org.chesscoach.core.MoveInputResult
  * своей записи.
  */
 sealed interface CandidateResult {
-    data class Explained(val uci: String, val text: String) : CandidateResult
+    data class Explained(
+        val uci: String,
+        val text: String,
+        /** Вариант с этим ходом: его можно проиграть на доске. */
+        val variation: Variation? = null,
+    ) : CandidateResult
 
     /** Запись не разобрана или такой ход в этой позиции невозможен. */
     object NotLegal : CandidateResult
@@ -90,11 +100,17 @@ class CoachEngine(engineClient: EngineClient) {
 
         val explanation = pipeline.explain(fen, parsed.uci)
         val text = TextRenderer.renderCandidate(explanation) ?: return CandidateResult.NoVerdict
-        return CandidateResult.Explained(parsed.uci, text)
+        val variation = Variations.of(explanation, CANDIDATE_TITLE).firstOrNull { it.title == CANDIDATE_TITLE }
+        return CandidateResult.Explained(parsed.uci, text, variation)
     }
+
+    /** Сводка повторяющихся ошибок по уже разобранным партиям: движок здесь не нужен. */
+    suspend fun errorReport(games: List<AnalyzedGame>): ErrorReport = ErrorReportBuilder(featureSource).build(games)
 
     companion object {
         const val VERSION: String = "M5"
+
+        private const val CANDIDATE_TITLE = "Ваш вариант"
 
         /**
          * Порядок детекторов не влияет на смысл: раскладкой по важности

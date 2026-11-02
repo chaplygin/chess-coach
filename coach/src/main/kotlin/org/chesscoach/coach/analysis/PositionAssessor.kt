@@ -1,14 +1,18 @@
 package org.chesscoach.coach.analysis
 
 import com.github.bhlangonijr.chesslib.Board
+import com.github.bhlangonijr.chesslib.CastleRight
 import com.github.bhlangonijr.chesslib.File
 import com.github.bhlangonijr.chesslib.Piece
 import com.github.bhlangonijr.chesslib.PieceType
 import com.github.bhlangonijr.chesslib.Side
 import org.chesscoach.coach.model.CoachThresholds
+import org.chesscoach.coach.model.DevelopmentPlan
 import org.chesscoach.coach.model.DiscoveredAttackFact
+import org.chesscoach.coach.model.Evidence
 import org.chesscoach.coach.model.FeatureSet
 import org.chesscoach.coach.model.ForkFact
+import org.chesscoach.coach.model.GamePhase
 import org.chesscoach.coach.model.HangingPieceFact
 import org.chesscoach.coach.model.KingSafetyFact
 import org.chesscoach.coach.model.MateFact
@@ -78,13 +82,38 @@ object PositionAssessor {
             PositionCharacter.SEMI_OPEN
         }
 
+        val plan = if (boardLoaded && features.phase == GamePhase.OPENING) developmentPlan(board, mover) else null
+
         return Section.PositionAssessment(
             materialCentipawns = features.materialCentipawns,
             character = character,
-            ideas = ideasFor(features, mover, character),
+            // В дебюте идею задаёт развитие: "подтянуть фигуры к королю" там ни о чём,
+            // короля уводят рокировкой, а её в плане и так называем.
+            ideas = ideasFor(features, mover, character).let { ideas ->
+                if (plan != null) ideas.filter { it == StrategicIdea.PUSH_PAWNS } else ideas
+            },
             opening = opening,
             pieceDifference = if (boardLoaded) pieceDifference(board) else emptyMap(),
+            developmentPlan = plan,
         )
+    }
+
+    /** Null — в дебюте всё сделано, и говорить о развитии незачем. */
+    private fun developmentPlan(board: Board, mover: Side): DevelopmentPlan? {
+        val homeRank = if (mover == Side.WHITE) "1" else "8"
+        val undeveloped = listOf(PieceType.KNIGHT, PieceType.BISHOP).flatMap { type ->
+            board.getPieceLocation(Piece.make(mover, type)).filter { it.value().endsWith(homeRank) }
+        }.sortedBy { it.ordinal }
+
+        val castlingPending = board.getCastleRight(mover) != CastleRight.NONE
+
+        // Центр занят, если своя пешка стоит на d- или e-линии дальше исходной горизонтали.
+        val pawnHome = if (mover == Side.WHITE) "2" else "7"
+        val needsCenter = board.getPieceLocation(Piece.make(mover, PieceType.PAWN))
+            .none { it.file in CENTER_FILES && !it.value().endsWith(pawnHome) }
+
+        if (undeveloped.isEmpty() && !castlingPending && !needsCenter) return null
+        return DevelopmentPlan(undeveloped, castlingPending, needsCenter, Evidence.onBoard(board, *undeveloped.toTypedArray()))
     }
 
     /**

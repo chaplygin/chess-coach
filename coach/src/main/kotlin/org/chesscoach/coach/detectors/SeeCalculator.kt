@@ -6,6 +6,7 @@ import com.github.bhlangonijr.chesslib.PieceType
 import com.github.bhlangonijr.chesslib.Side
 import com.github.bhlangonijr.chesslib.Square
 import com.github.bhlangonijr.chesslib.move.Move
+import org.chesscoach.core.MoveNotation
 
 /**
  * Честный статический размен (SEE) на одном поле.
@@ -116,6 +117,59 @@ object SeeCalculator {
         val victimValue = pieceValue(working.getPiece(target))
         working.doMove(move)
         return victimValue - exchange(working, target)
+    }
+
+    /**
+     * Цепочка взятий на [target] записью SAN: первое взятие и все ответы, пока
+     * следующее взятие выгодно. Без неё "конь берёт слона" не говорит, что коня
+     * тут же заберут. Пусто — бить нечем.
+     */
+    fun exchangeLineSan(board: Board, target: Square, attacker: Side): List<String> {
+        val working = turnedTo(board, attacker) ?: return emptyList()
+        val start = working.fen
+        val first = cheapestCapture(working, target) ?: return emptyList()
+        working.doMove(first)
+        return MoveNotation.uciToSanOrRaw(start, listOf(first.toString()) + profitableReplies(working, target))
+    }
+
+    /**
+     * Что будет, если всё же взять обратно на [target]: первое взятие [attacker],
+     * вынужденный ответ защитника и выгодные продолжения. Отвечает на вопрос
+     * "почему взять обратно невыгодно" прямо ходами. Пусто — взять обратно нечем.
+     */
+    fun recaptureLineSan(board: Board, target: Square, attacker: Side): List<String> {
+        val working = turnedTo(board, attacker) ?: return emptyList()
+        val start = working.fen
+        val first = cheapestCapture(working, target) ?: return emptyList()
+        working.doMove(first)
+        val recapture = cheapestCapture(working, target) ?: return emptyList()
+        working.doMove(recapture)
+        val rest = profitableReplies(working, target)
+        return MoveNotation.uciToSanOrRaw(start, listOf(first.toString(), recapture.toString()) + rest)
+    }
+
+    private fun turnedTo(board: Board, side: Side): Board? {
+        val working = board.clone()
+        if (working.sideToMove != side) {
+            working.sideToMove = side
+            working.enPassant = Square.NONE
+            working.enPassantTarget = Square.NONE
+        }
+        return if (working.isKingAttacked) null else working
+    }
+
+    private fun cheapestCapture(board: Board, target: Square): Move? =
+        board.legalMoves().filter { it.to == target }.minByOrNull { pieceValue(board.getPiece(it.from)) }
+
+    /** Доигрывает размен на копии [board], пока очередное взятие выгодно. */
+    private fun profitableReplies(board: Board, target: Square): List<String> {
+        val replies = ArrayList<String>()
+        while (exchange(board, target) > 0) {
+            val move = cheapestCapture(board, target) ?: break
+            replies += move.toString()
+            board.doMove(move)
+        }
+        return replies
     }
 
     /**

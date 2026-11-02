@@ -1,19 +1,28 @@
 package org.chesscoach.coach.analysis
 
 import com.github.bhlangonijr.chesslib.Board
+import com.github.bhlangonijr.chesslib.Piece
 import com.github.bhlangonijr.chesslib.Side
 import com.github.bhlangonijr.chesslib.Square
+import com.github.bhlangonijr.chesslib.move.Move
 import org.chesscoach.coach.detectors.SeeCalculator
 import org.chesscoach.coach.engine.CoachSearchLimits
 import org.chesscoach.coach.engine.EngineClient
 import org.chesscoach.coach.engine.NullMoveUtil
+import org.chesscoach.coach.model.BackRankFact
 import org.chesscoach.coach.model.CoachThresholds
+import org.chesscoach.coach.model.DiscoveredAttackFact
 import org.chesscoach.coach.model.Evidence
 import org.chesscoach.coach.model.Fact
 import org.chesscoach.coach.model.FeatureSource
 import org.chesscoach.coach.model.ForkFact
 import org.chesscoach.coach.model.HangingPieceFact
+import org.chesscoach.coach.model.MateFact
+import org.chesscoach.coach.model.OverloadedDefenderFact
+import org.chesscoach.coach.model.PinFact
+import org.chesscoach.coach.model.SkewerFact
 import org.chesscoach.coach.model.ThreatFact
+import org.chesscoach.coach.model.TrappedPieceFact
 import org.chesscoach.core.EngineLine
 import org.chesscoach.core.MoveNotation
 import org.chesscoach.core.Score
@@ -35,6 +44,10 @@ internal data class NullMoveThreat(
     val dropCentipawns: Int,
     val flippedFen: String,
     val bestLine: EngineLine,
+    /** Ход сам что-то выигрывает: мат или взятие с прибылью, а не просто лучший ход при пропуске. */
+    val wins: Boolean,
+    /** Ход — взятие без прибыли: падение оценки здесь значит лишь, что упущен свой ход. */
+    val idleCapture: Boolean,
 )
 
 /**
@@ -63,14 +76,38 @@ internal suspend fun measureNullMoveThreat(
 
     val opponentMoveSan = MoveNotation.uciToSanOrRaw(flipped, listOf(opponentMoveUci)).first()
 
+    val mates = (bestLine.score as? Score.Mate)?.let { it.movesToMate > 0 } == true
+    val capture = captureGain(flipped, opponentMoveUci)
+
     return NullMoveThreat(
         opponentMoveUci = opponentMoveUci,
         opponentMoveSan = opponentMoveSan,
         dropCentipawns = drop,
         flippedFen = flipped,
         bestLine = bestLine,
+        wins = mates || (capture != null && capture >= SeeCalculator.WINNING_MIN_CP),
+        idleCapture = !mates && capture != null && capture < SeeCalculator.WINNING_MIN_CP,
     )
 }
+
+/** Итог взятия по размену. Null — ход не взятие. */
+private fun captureGain(fen: String, uci: String): Int? {
+    val board = Board()
+    if (!runCatching { board.loadFromFen(fen) }.isSuccess || uci.length < 4) return null
+    val move = runCatching { Move(uci, board.sideToMove) }.getOrNull() ?: return null
+    if (board.getPiece(move.to) == Piece.NONE) return null
+    return SeeCalculator.evaluateMove(board, move)
+}
+
+/** Что реально сыпется: материал, король, мат. Отсталая пешка и чужая подвижность угрозу не объясняют. */
+internal fun explainsDanger(fact: Fact): Boolean = when (fact) {
+    is HangingPieceFact, is TrappedPieceFact, is ForkFact, is PinFact, is SkewerFact,
+    is DiscoveredAttackFact, is BackRankFact, is OverloadedDefenderFact, is MateFact,
+    -> true
+    else -> false
+}
+
+private const val THREAT_LINE_PLIES = 3
 
 /** Применяет ход в UCI-записи ("e2e4", "e7e8q") к позиции. Null — ход не сыграть по правилам. */
 internal fun applyUciMove(fen: String, uci: String): String? {
@@ -113,6 +150,11 @@ class ThreatAnalyzer(
             .filter { it.favours == opponentSide && signature(it) !in before }
             .filterNot { answeredByCapture(it, afterThreatFen, threat.opponentMoveUci, ourSide) }
 
+        // Падение оценки при пропуске хода само по себе не угроза: так же падает
+        // оценка, когда у меня есть что забрать. Угрозой называем только ход,
+        // который сам что-то выигрывает: конкретно и проверяемо на доске.
+        if (!threat.wins && consequences.none(::explainsDanger)) return null
+
         return ThreatFact(
             opponentMoveUci = threat.opponentMoveUci,
             opponentMoveSan = threat.opponentMoveSan,
@@ -120,6 +162,7 @@ class ThreatAnalyzer(
             consequences = consequences,
             favours = opponentSide,
             evidence = Evidence.fromEngine(threat.bestLine),
+            lineSan = MoveNotation.uciToSanOrRaw(threat.flippedFen, threat.bestLine.pv.take(THREAT_LINE_PLIES)),
         )
     }
 }

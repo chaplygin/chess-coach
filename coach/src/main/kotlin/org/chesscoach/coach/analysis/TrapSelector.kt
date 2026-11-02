@@ -40,10 +40,12 @@ class TrapSelector(
         mover: Side,
         mainLines: List<EngineLine>,
         quickLines: List<EngineLine>,
+        playedUci: String? = null,
     ): Section.Trap? {
         val sorted = mainLines.sortedBy { it.multiPvIndex }
         val bestLine = sorted.firstOrNull() ?: return null
-        val alternatives = sorted.drop(1)
+        // Сыгранный ход разбирается своим разделом: второй раз про него незачем.
+        val alternatives = sorted.drop(1).filter { it.pv.firstOrNull() != playedUci }
         if (alternatives.isEmpty()) return null
 
         val board = Board()
@@ -75,6 +77,8 @@ class TrapSelector(
             lossCentipawns = chosen.loss,
             refutationSan = refutationSan,
             verdict = verdict,
+            scoreFromWhite = ScoreFormat.toWhitePerspective(refutationLine.score, mover.flip()),
+            lineUci = listOf(chosen.uci) + refutationUci,
         )
     }
 

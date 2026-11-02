@@ -3,7 +3,9 @@ package org.chesscoach.coach.detectors
 import com.github.bhlangonijr.chesslib.Board
 import com.github.bhlangonijr.chesslib.Piece
 import com.github.bhlangonijr.chesslib.PieceType
+import com.github.bhlangonijr.chesslib.Side
 import com.github.bhlangonijr.chesslib.Square
+import com.github.bhlangonijr.chesslib.move.Move
 import org.chesscoach.coach.model.Evidence
 import org.chesscoach.coach.model.Fact
 import org.chesscoach.coach.model.HangingPieceFact
@@ -47,10 +49,23 @@ class HangingDetector : Detector {
                     ),
                     firstAttacker = first?.from,
                     defended = first?.recaptureExists ?: false,
+                    recaptureLineSan = SeeCalculator.recaptureLineSan(board, square, attacker),
+                    recapturer = recapturerOf(board, square, attacker),
                 )
             }
         }
 
         return facts
+    }
+
+    /** Какой фигурой пришлось бы брать обратно: именно она и теряется, если размен продолжат. */
+    private fun recapturerOf(board: Board, square: Square, attacker: Side): Piece? {
+        val first = SeeCalculator.firstCapture(board, square, attacker) ?: return null
+        if (!first.recaptureExists) return null
+        val after = boardAfter(board, attacker, Move(first.from, square))
+        return after.legalMoves()
+            .filter { it.to == square }
+            .minByOrNull { SeeCalculator.value(after.getPiece(it.from).pieceType) }
+            ?.let { after.getPiece(it.from) }
     }
 }

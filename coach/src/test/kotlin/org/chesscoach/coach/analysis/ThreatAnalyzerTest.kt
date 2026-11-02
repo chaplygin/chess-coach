@@ -151,7 +151,7 @@ class ThreatAnalyzerTest {
 
         val threat = ThreatAnalyzer(engine, features).analyse(CommonFens.FORK_SETUP, normalScore = Score.Cp(0))
 
-        checkNotNull(threat)
-        assertTrue(threat.consequences.toString(), threat.consequences.isEmpty())
+        // Своих следствий у хода нет, поэтому и угрозой он не считается.
+        assertNull(threat)
     }
 }
