@@ -25,6 +25,6 @@ fi
 echo "Приложение запустилось"
 
 # Движок arm64 на эмуляторе x86_64 идёт через трансляцию, которая есть не в каждом
-# образе. Поэтому его отказ здесь только сообщение, а не падение проверки.
-LIB_DIR="$(adb shell pm dump "$PACKAGE" | grep -m1 nativeLibraryDir= | cut -d= -f2 | tr -d '[:space:]')"
-adb shell "$LIB_DIR/libstockfish.so bench 16 1 8" 2>&1 | tail -n 5 || echo "Движок в эмуляторе не запустился"
+# образе, поэтому файл здесь только ищем: считает он при сборке, под qemu.
+APP_DIR="$(adb shell pm path "$PACKAGE" | head -n1 | cut -d: -f2 | tr -d '[:space:]' | xargs dirname)"
+adb shell ls -l "$APP_DIR/lib/arm64/libstockfish.so" || exit 1

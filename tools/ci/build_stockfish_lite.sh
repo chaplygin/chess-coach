@@ -31,6 +31,10 @@ SRC="$WORK/stockfish.js-$COMMIT/src"
 # В этом коммите обычная (не WASM) сборка не компилируется из-за опечатки.
 sed -i 's/uci.loop();/uci->loop();/' "$SRC/main.cpp"
 
+# Android 15+ бывает со страницей 16 КБ, а итоговая компоновка универсальной
+# сборки обычных флагов LDFLAGS не видит.
+sed -i 's/^UNIVERSAL_FINAL_FLAGS := -fno-exceptions -Os/UNIVERSAL_FINAL_FLAGS := -Wl,-z,max-page-size=16384 -fno-exceptions -Os/' "$SRC/Makefile"
+
 # Проверка на этой же машине: сеть должна грузиться, а движок считать. Телефонный
 # бинарник на раннере не запустить.
 echo "==> Проверочная сборка для раннера"
@@ -51,6 +55,11 @@ if ! head -c 4 "$BIN" | od -An -tx1 | grep -q "7f 45 4c 46"; then
   exit 1
 fi
 llvm-strip "$BIN"
+
+# Сборка статическая, поэтому сам телефонный бинарник можно запустить на раннере.
+sudo apt-get install -y -qq qemu-user-static > /dev/null
+qemu-aarch64-static "$BIN" bench 16 1 8 2>&1 | tail -n 4
+qemu-aarch64-static "$BIN" bench 16 1 8 2>&1 | grep -q "Nodes searched"
 
 cd "$ROOT"
 mkdir -p "$DEST_DIR"
