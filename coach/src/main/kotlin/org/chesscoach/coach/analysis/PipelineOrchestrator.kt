@@ -11,7 +11,12 @@ import org.chesscoach.coach.model.CoachThresholds
 import org.chesscoach.coach.model.HumanMove
 import org.chesscoach.coach.model.DevelopmentFact
 import org.chesscoach.coach.model.DiscoveredAttackFact
+import org.chesscoach.coach.model.EndgameFact
 import org.chesscoach.coach.model.Fact
+import org.chesscoach.coach.model.ForkThreatFact
+import org.chesscoach.coach.model.PawnBreakFact
+import org.chesscoach.coach.model.RemoveDefenderFact
+import org.chesscoach.coach.model.WeakSquareFact
 import org.chesscoach.coach.model.FeatureSet
 import org.chesscoach.coach.model.FeatureSource
 import org.chesscoach.coach.model.ForkFact
@@ -51,6 +56,7 @@ class PipelineOrchestrator(
     private val threatAnalyzer = ThreatAnalyzer(engineClient, featureSource)
     private val reasonDiffAnalyzer = ReasonDiffAnalyzer(engineClient, featureSource)
     private val trapSelector = TrapSelector(engineClient)
+    private val lineAnalyzer = LineAnalyzer(featureSource)
 
     private companion object {
         /** Насколько ход должен превосходить второй по силе, чтобы молчание детекторов стало подозрительным. */
@@ -88,6 +94,7 @@ class PipelineOrchestrator(
         // 3. Оценка позиции и расклад "моя позиция / моя атака" — без движка,
         // прямо из уже посчитанных признаков. Это первое, что читает человек,
         // поэтому идёт в списке раньше конкретного хода.
+        bestLine?.let { lineAnalyzer.analyse(fen, it) }?.let { sections += it }
         sections += PositionAssessor.assess(fen, featuresBefore, sideToMove, opening)
         sections += myPositionSection(featuresBefore, sideToMove, threat)
         sections += myAttackSection(featuresBefore, sideToMove)
@@ -209,9 +216,11 @@ class PipelineOrchestrator(
      */
     private fun myPositionSection(features: FeatureSet, mover: Side, threat: ThreatFact?): Section {
         val opponent = mover.flip()
-        val kingSafety = features.pick<KingSafetyFact>().filter { it.kingSide == mover }
+        val kingSafety = features.pick<KingSafetyFact>().filter { it.kingSide == mover } +
+            features.favouring(opponent).filter(::isActiveIdea)
         val loosePieces = features.favouring(opponent).filter {
-            it is HangingPieceFact || it is TrappedPieceFact || it is BackRankFact
+            it is HangingPieceFact || it is TrappedPieceFact || it is BackRankFact ||
+                it is ForkThreatFact || it is RemoveDefenderFact
         }
         // Раздел собирается всегда, даже когда все четыре пункта пусты:
         // "Угроза: нет" — это ответ на вопрос читателя, а пропущенный раздел он
@@ -230,9 +239,10 @@ class PipelineOrchestrator(
         val mate = mine.filter { it is MateFact || it is BackRankFact }
         val captures = mine.filter {
             it is HangingPieceFact || it is ForkFact || it is PinFact || it is SkewerFact ||
-                it is DiscoveredAttackFact || it is OverloadedDefenderFact
+                it is DiscoveredAttackFact || it is OverloadedDefenderFact ||
+                it is ForkThreatFact || it is RemoveDefenderFact
         }
-        val activity = mine.filter {
+        val activity = mine.filter(::isActiveIdea) + mine.filter {
             it is MobilityEdgeFact || it is OutpostFact || it is OpenFileRookFact ||
                 it is CenterControlFact || it is DevelopmentFact
         }
@@ -243,6 +253,10 @@ class PipelineOrchestrator(
             plan = PlanBuilder.build(features, mover),
         )
     }
+
+    /** Признаки, которые говорят, куда играть: идут первыми, потому что в пункте помещается два факта. */
+    private fun isActiveIdea(fact: Fact): Boolean =
+        fact is WeakSquareFact || fact is PawnBreakFact || fact is EndgameFact
 
     /**
      * «Человеческий» ход: первый ход поиска малой глубины, который основной
@@ -343,6 +357,7 @@ class PipelineOrchestrator(
      * потом конкретный ход и разбор сыгранного.
      */
     private fun readingOrder(section: Section): Int = when (section) {
+        is Section.EvalReason -> -1
         is Section.PositionAssessment -> 0
         is Section.MyPosition -> 1
         is Section.MyAttack -> 2

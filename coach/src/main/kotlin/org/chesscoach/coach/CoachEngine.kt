@@ -5,8 +5,13 @@ import org.chesscoach.coach.detectors.BackRankDetector
 import org.chesscoach.coach.detectors.DevelopmentDetector
 import org.chesscoach.coach.detectors.Detector
 import org.chesscoach.coach.detectors.DiscoveredAttackDetector
+import org.chesscoach.coach.detectors.EndgameDetector
 import org.chesscoach.coach.detectors.FeatureSetBuilder
 import org.chesscoach.coach.detectors.ForkDetector
+import org.chesscoach.coach.detectors.ForkThreatDetector
+import org.chesscoach.coach.detectors.PawnBreakDetector
+import org.chesscoach.coach.detectors.RemoveDefenderDetector
+import org.chesscoach.coach.detectors.WeakSquareDetector
 import org.chesscoach.coach.detectors.HangingDetector
 import org.chesscoach.coach.detectors.KingSafetyDetector
 import org.chesscoach.coach.detectors.OverloadDetector
@@ -106,6 +111,11 @@ class CoachEngine(engineClient: EngineClient) {
             PawnStructureDetector(),
             PieceActivityDetector(),
             DevelopmentDetector(),
+            ForkThreatDetector(),
+            RemoveDefenderDetector(),
+            WeakSquareDetector(),
+            PawnBreakDetector(),
+            EndgameDetector(),
         )
     }
 }

@@ -247,7 +247,9 @@ class TextRendererNewSectionsTest {
         val text = TextRenderer.render(explanation(listOf(played)))
 
         assertTrue(text, text.contains("Ключевой момент"))
-        assertTrue(text, text.contains("после хода +3.2"))
+        assertTrue(text, text.contains("Оценка до хода: +0.4"))
+        assertTrue(text, text.contains("Оценка после хода Nd4: +3.2 (дельта +2.9)"))
+        assertTrue(text, text.contains("Оценка была бы после лучшего хода Rfe8: +0.4 (дельта была бы 0.0)"))
         assertTrue(text, text.contains("Коротко: Nd4 — зевок"))
         assertTrue(text, text.contains("Вопрос на будущее:"))
     }
@@ -284,6 +286,37 @@ class TextRendererNewSectionsTest {
         val text = TextRenderer.render(explanation(listOf(Section.BestMoves(listOf("Rfe8"), human))))
 
         assertTrue(text, text.contains("Человек: Bd6 Bd3 (слабее лучшего на 0.3). Ход заметен сразу"))
+    }
+
+    // ——— ПОЧЕМУ ТАКАЯ ОЦЕНКА ———
+
+    @Test
+    fun `the reason names what the line wins`() {
+        val reason = Section.EvalReason(
+            materialNow = -90,
+            leader = Side.BLACK,
+            lineSan = listOf("exf4"),
+            materialSwing = 170,
+            swingLineSan = listOf("exf4", "Nxf4", "Bxd1", "Qxd1"),
+        )
+        val text = TextRenderer.render(explanation(listOf(reason)))
+
+        assertTrue(text, text.contains("ПОЧЕМУ ТАКАЯ ОЦЕНКА"))
+        assertTrue(text, text.contains("В варианте exf4 Nxf4 Bxd1 Qxd1 чёрные выигрывают качество."))
+    }
+
+    @Test
+    fun `no leader means the reason says so instead of inventing one`() {
+        val text = TextRenderer.render(explanation(listOf(Section.EvalReason(0, null, listOf("e4")))))
+
+        assertTrue(text, text.contains("Материал равный. Перевеса нет"))
+    }
+
+    @Test
+    fun `a positional edge with nothing concrete points at the line`() {
+        val text = TextRenderer.render(explanation(listOf(Section.EvalReason(0, Side.WHITE, listOf("e4", "e5"), materialSwing = 0))))
+
+        assertTrue(text, text.contains("Перевес у белых позиционный, движок видит его в варианте e4 e5."))
     }
 
     // ——— СЫГРАННЫЙ ХОД ———

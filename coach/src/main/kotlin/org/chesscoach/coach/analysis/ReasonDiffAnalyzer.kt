@@ -4,6 +4,11 @@ import com.github.bhlangonijr.chesslib.Side
 import org.chesscoach.coach.engine.CoachSearchLimits
 import org.chesscoach.coach.engine.EngineClient
 import org.chesscoach.coach.engine.NullMoveUtil
+import org.chesscoach.coach.model.EndgameFact
+import org.chesscoach.coach.model.ForkThreatFact
+import org.chesscoach.coach.model.PawnBreakFact
+import org.chesscoach.coach.model.RemoveDefenderFact
+import org.chesscoach.coach.model.WeakSquareFact
 import org.chesscoach.coach.model.BackRankFact
 import org.chesscoach.coach.model.BadBishopFact
 import org.chesscoach.coach.model.CenterControlFact
@@ -241,5 +246,11 @@ class ReasonDiffAnalyzer(
         is CenterControlFact -> ReasonTier.ACTIVITY
         // Угроза — самостоятельная секция, а не одна из причин "почему этот ход".
         is ThreatFact -> null
+        is RemoveDefenderFact -> ReasonTier.MATERIAL_TACTICS
+        is WeakSquareFact -> ReasonTier.STRUCTURE
+        is EndgameFact -> ReasonTier.STRUCTURE
+        // Возможность на следующий ход не объясняет сам ход: соперник успевает ответить.
+        is ForkThreatFact -> null
+        is PawnBreakFact -> null
     }
 }

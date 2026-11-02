@@ -1,5 +1,6 @@
 package org.chesscoach.app.ui
 
+import android.content.Intent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -35,6 +36,12 @@ import org.chesscoach.engine.EngineSettingsStore
 private const val HASH_STEP_MB = 16
 private const val SUCCESS_TEXT_COLOR = 0xFF1E8E3E
 private const val SITE_URL = "https://chaplygin.github.io/chess-coach/"
+private const val APK_URL = "https://github.com/chaplygin/chess-coach/releases/latest/download/chesscoach.apk"
+private val SHARE_TEXT = listOf(
+    "Шахматный наставник: разбор партий Lichess с объяснениями на русском.",
+    "Приложение для Android (APK): $APK_URL",
+    "В браузере: $SITE_URL",
+).joinToString(System.lineSeparator())
 
 /**
  * Экран настроек (M8): Threads/Hash движка, выход из аккаунта, очистка кэша
@@ -173,9 +180,20 @@ fun SettingsScreen(
                     },
                 ) { Text("Открыть сайт") }
 
+                OutlinedButton(
+                    onClick = {
+                        val send = Intent(Intent.ACTION_SEND)
+                            .setType("text/plain")
+                            .putExtra(Intent.EXTRA_TEXT, SHARE_TEXT)
+                        siteOpenFailed = runCatching {
+                            context.startActivity(Intent.createChooser(send, "Поделиться приложением"))
+                        }.isFailure
+                    },
+                ) { Text("Поделиться приложением") }
+
                 if (siteOpenFailed) {
                     Text(
-                        "Не удалось открыть браузер.",
+                        "Не удалось открыть другое приложение.",
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }

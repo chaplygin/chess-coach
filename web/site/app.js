@@ -282,6 +282,26 @@ function drawBoard(fen, flipped, lastUci, arrows) {
   return wrap;
 }
 
+// Полоска оценки как на Lichess: белая часть со стороны белых, число на стороне ведущего.
+function drawEvalBar(evaluation, flipped) {
+  const known = evaluation && (evaluation.mate !== null || evaluation.cp !== null);
+  const share = !known ? 0.5
+    : evaluation.mate !== null ? (evaluation.mate >= 0 ? 1 : 0)
+    : 1 / (1 + Math.exp(-0.00368208 * evaluation.cp));
+  const whiteLeads = share >= 0.5;
+  const labelOnTop = whiteLeads === flipped;
+  return h("div", { class: "evalbar", role: "img", "aria-label": "Полоска оценки" },
+    h("div", {
+      class: "evalbar-white",
+      style: "height:" + share * 100 + "%;" + (flipped ? "top:0" : "bottom:0"),
+    }),
+    known ? h("span", {
+      class: "evalbar-label " + (whiteLeads ? "on-white" : "on-black"),
+      style: labelOnTop ? "top:2px" : "bottom:2px",
+    }, shortScore(evaluation)) : null,
+  );
+}
+
 function drawArrows(arrows, flipped) {
   const NS = "http://www.w3.org/2000/svg";
   const svg = document.createElementNS(NS, "svg");
@@ -474,7 +494,10 @@ function showReview(game) {
     });
     const usedStyles = [...new Set(arrows.map((a) => a.style))];
     const left = h("div", {},
-      drawBoard(fenAt(ply), flipped, ply > 0 ? positions[ply - 1].uci : "", arrows),
+      h("div", { class: "board-row" },
+        drawBoard(fenAt(ply), flipped, ply > 0 ? positions[ply - 1].uci : "", arrows),
+        drawEvalBar(ply > 0 ? evaluations[ply - 1] : null, flipped),
+      ),
       usedStyles.length ? h("div", { class: "legend" }, usedStyles.map((style) => h("span", {},
         h("i", { style: "background:" + ARROW_COLORS[style] }), ARROW_NAMES[style] || style))) : null,
       h("div", { class: "controls" },

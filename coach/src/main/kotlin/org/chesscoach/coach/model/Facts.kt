@@ -272,6 +272,54 @@ data class CenterControlFact(
     override val evidence: Evidence,
 ) : Fact
 
+/** Вилки ещё нет, но фигура может встать на [to] и напасть сразу на [targets]: проверено ходом на копии доски. */
+data class ForkThreatFact(
+    val from: Square,
+    val to: Square,
+    val piece: Piece,
+    val targets: List<Square>,
+    override val favours: Side,
+    override val evidence: Evidence,
+) : Fact
+
+/** Взятие [defender] не проигрывает материал и оставляет [target] под выгодным боем другой фигуры. */
+data class RemoveDefenderFact(
+    val capturer: Square,
+    val defender: Square,
+    val target: Square,
+    override val favours: Side,
+    override val evidence: Evidence,
+) : Fact
+
+/** Поле у короля, которое своя пешка уже не прикроет, а соперник на него смотрит. */
+data class WeakSquareFact(
+    val square: Square,
+    val owner: Side,
+    override val favours: Side,
+    override val evidence: Evidence,
+) : Fact
+
+/** Ход пешкой, которая безопасно нападает на пешку соперника и вскрывает игру. */
+data class PawnBreakFact(
+    val from: Square,
+    val to: Square,
+    val target: Square,
+    val owner: Side,
+    override val favours: Side,
+    override val evidence: Evidence,
+) : Fact
+
+enum class EndgameKind { ROOK_BEHIND_PASSED, KING_OUTSIDE_SQUARE, ACTIVE_KING, OPPOSITE_BISHOPS }
+
+/** Признак, который имеет смысл только в эндшпиле. [square] зависит от [kind]: пешка, король или слон. */
+data class EndgameFact(
+    val kind: EndgameKind,
+    val square: Square,
+    val owner: Side,
+    override val favours: Side,
+    override val evidence: Evidence,
+) : Fact
+
 // ——— Выводы аналитического слоя ———
 
 /**

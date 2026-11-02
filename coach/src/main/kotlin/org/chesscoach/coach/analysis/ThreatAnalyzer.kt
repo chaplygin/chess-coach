@@ -1,6 +1,9 @@
 package org.chesscoach.coach.analysis
 
 import com.github.bhlangonijr.chesslib.Board
+import com.github.bhlangonijr.chesslib.Side
+import com.github.bhlangonijr.chesslib.Square
+import org.chesscoach.coach.detectors.SeeCalculator
 import org.chesscoach.coach.engine.CoachSearchLimits
 import org.chesscoach.coach.engine.EngineClient
 import org.chesscoach.coach.engine.NullMoveUtil
@@ -8,6 +11,8 @@ import org.chesscoach.coach.model.CoachThresholds
 import org.chesscoach.coach.model.Evidence
 import org.chesscoach.coach.model.Fact
 import org.chesscoach.coach.model.FeatureSource
+import org.chesscoach.coach.model.ForkFact
+import org.chesscoach.coach.model.HangingPieceFact
 import org.chesscoach.coach.model.ThreatFact
 import org.chesscoach.core.EngineLine
 import org.chesscoach.core.MoveNotation
@@ -106,6 +111,7 @@ class ThreatAnalyzer(
         val before = featureSource.features(fen).facts.map(::signature).toSet()
         val consequences = featureSource.features(afterThreatFen).facts
             .filter { it.favours == opponentSide && signature(it) !in before }
+            .filterNot { answeredByCapture(it, afterThreatFen, threat.opponentMoveUci, ourSide) }
 
         return ThreatFact(
             opponentMoveUci = threat.opponentMoveUci,
@@ -116,6 +122,24 @@ class ThreatAnalyzer(
             evidence = Evidence.fromEngine(threat.bestLine),
         )
     }
+}
+
+/**
+ * Удар той самой фигуры, которая пошла угрозой, если её можно выгодно побить.
+ * Такой удар существует только на бумаге: пешка, которую сразу забирают, ни на
+ * коня, ни на слона уже не нападает.
+ */
+private fun answeredByCapture(fact: Fact, afterFen: String, moveUci: String, ourSide: Side): Boolean {
+    val moved = moveUci.drop(2).take(2).uppercase()
+    val fromMoved = when (fact) {
+        is HangingPieceFact -> fact.firstAttacker?.value() == moved
+        is ForkFact -> fact.from.value() == moved
+        else -> false
+    }
+    if (!fromMoved) return false
+    val board = Board()
+    if (!runCatching { board.loadFromFen(afterFen) }.isSuccess) return false
+    return SeeCalculator.evaluateSquare(board, Square.valueOf(moved), ourSide) > 0
 }
 
 /**

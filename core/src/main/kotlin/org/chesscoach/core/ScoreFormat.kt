@@ -3,6 +3,7 @@ package org.chesscoach.core
 import com.github.bhlangonijr.chesslib.Side
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.exp
 
 /**
  * Приведение оценки к виду, привычному человеку.
@@ -55,6 +56,15 @@ object ScoreFormat {
                 }
             }
         }
+    }
+
+    /**
+     * Доля белых на полоске оценки, от 0 до 1. Оценка от лица белых.
+     * Кривая та же, что у Lichess: перевес в пешку заметен, а разница между +8 и +9 уже нет.
+     */
+    fun whiteShare(score: Score): Float = when (score) {
+        is Score.Mate -> if (score.movesToMate >= 0) 1f else 0f
+        is Score.Cp -> (1.0 / (1.0 + exp(-0.00368208 * score.centipawns))).toFloat()
     }
 
     /**

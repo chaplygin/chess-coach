@@ -17,7 +17,15 @@ import org.chesscoach.coach.model.ForkFact
 import org.chesscoach.coach.model.HangingPieceFact
 import org.chesscoach.coach.model.KingSafetyFact
 import org.chesscoach.coach.model.MateFact
+import org.chesscoach.coach.detectors.SeeCalculator
+import org.chesscoach.coach.model.EndgameFact
+import org.chesscoach.coach.model.EndgameKind
+import org.chesscoach.coach.model.ForkThreatFact
+import org.chesscoach.coach.model.MatePattern
 import org.chesscoach.coach.model.MaterialVerdict
+import org.chesscoach.coach.model.PawnBreakFact
+import org.chesscoach.coach.model.RemoveDefenderFact
+import org.chesscoach.coach.model.WeakSquareFact
 import org.chesscoach.coach.model.MobilityEdgeFact
 import org.chesscoach.coach.model.OpenFileRookFact
 import org.chesscoach.coach.model.OpeningCaveat
@@ -179,20 +187,40 @@ object TextRenderer {
         GamePhase.ENDGAME -> "Эндшпиль"
     }
 
-    /** Оценка до и после сыгранного хода. Числа всегда от лица белых, как в списке ходов. */
+    /**
+     * Оценка до хода, после него и после лучшего. Числа всегда от лица белых, как
+     * в списке ходов, поэтому дельта с плюсом — это сдвиг в пользу белых.
+     *
+     * Оценка позиции и есть оценка лучшего хода в ней, поэтому дельта лучшего хода
+     * равна нулю: так видно, сколько стоил именно сыгранный ход.
+     */
     private fun scoreLine(explanation: PositionExplanation, played: Section.PlayedMove?): String? {
         val before = explanation.scoreFromWhite ?: return null
-        if (played == null || played.matchesBest || played.centipawnLoss >= COLLAPSE_CP) {
+        if (played == null || played.centipawnLoss >= COLLAPSE_CP || before !is Score.Cp) {
             return "Оценка ${ScoreFormat.display(before)}"
         }
-        if (before !is Score.Cp) return "Оценка ${ScoreFormat.display(before)}"
+        val shown = ScoreFormat.short(before)
+        val move = SanRuFormatter.move(played.playedSan)
+        if (played.matchesBest) {
+            return "Оценка до хода: $shown" + System.lineSeparator() +
+                "Оценка после хода $move (это лучший ход): $shown (дельта 0.0)"
+        }
         val sign = if (explanation.sideToMove == Side.WHITE) -1 else 1
-        val after = Score.Cp(before.centipawns + sign * played.centipawnLoss)
-        return "Оценка до хода ${ScoreFormat.short(before)}, после хода ${ScoreFormat.short(after)}"
+        val delta = Score.Cp(sign * played.centipawnLoss)
+        val after = Score.Cp(before.centipawns + delta.centipawns)
+        return listOf(
+            "Оценка до хода: $shown",
+            "Оценка после хода $move: ${ScoreFormat.short(after)} (дельта ${ScoreFormat.short(delta)})",
+            "Оценка была бы после лучшего хода ${SanRuFormatter.move(played.bestSan)}: $shown (дельта была бы 0.0)",
+        ).joinToString(System.lineSeparator())
     }
 
     private fun summaryLine(section: Section.PlayedMove): String {
         if (section.matchesBest) return "Коротко: сыгран лучший ход."
+        if (section.classification == MoveClassification.BEST) {
+            return "Коротко: " + SanRuFormatter.move(section.playedSan) + " не уступает лучшему ходу " +
+                SanRuFormatter.move(section.bestSan) + "."
+        }
         return "Коротко: " + SanRuFormatter.move(section.playedSan) + " — " +
             classificationLabel(section.classification) + damageMark(section) +
             ", лучше было " + SanRuFormatter.move(section.bestSan) + "."
@@ -225,6 +253,7 @@ object TextRenderer {
     // ——— Заголовки и тела разделов ———
 
     private fun titleOf(section: Section, explanation: PositionExplanation): String = when (section) {
+        is Section.EvalReason -> "ПОЧЕМУ ТАКАЯ ОЦЕНКА"
         is Section.PositionAssessment -> "ПОЗИЦИЯ"
         is Section.MyPosition -> "ПЛАН СОПЕРНИКА"
         is Section.MyAttack -> "МОЙ ПЛАН"
@@ -286,6 +315,7 @@ object TextRenderer {
         memory: RenderMemory,
         forkedSquares: Set<Square>,
     ): String? = when (section) {
+        is Section.EvalReason -> evalReasonBody(section, glossary)
         is Section.PositionAssessment -> positionAssessmentBody(section)
         is Section.MyPosition -> myPositionBody(section, pool, glossary, memory, forkedSquares)
         is Section.MyAttack -> myAttackBody(section, glossary, memory, forkedSquares)
@@ -296,6 +326,82 @@ object TextRenderer {
         is Section.Trap -> trapBody(section, explanation.sideToMove)
         is Section.Alternatives -> alternativesBody(section)
     }
+
+    // ——— ПОЧЕМУ ТАКАЯ ОЦЕНКА ———
+
+    /**
+     * Отвечает своими фразами и своей памятью: факт, названный здесь, должен
+     * прозвучать и в разделе ниже, а этот блок читают отдельно.
+     */
+    private fun evalReasonBody(section: Section.EvalReason, glossary: Glossary): String {
+        val leader = section.leader
+        val line = { san: List<String> -> san.joinToString(" ") { SanRuFormatter.move(it) } }
+
+        if (section.mateIn != null && leader != null) {
+            val pattern = when (section.matePattern) {
+                MatePattern.SMOTHERED -> " Рисунок: спёртый мат, королю мешают свои же фигуры."
+                MatePattern.BACK_RANK -> " Рисунок: линейный мат по последней горизонтали."
+                null -> ""
+            }
+            return capitalize(SideLexicon.name(leader)) + " ставят мат в " + section.mateIn + " " +
+                movesWord(section.mateIn) + ": " + line(section.lineSan) + "." + pattern
+        }
+
+        val parts = mutableListOf(materialNowSentence(section.materialNow))
+        if (leader == null) {
+            parts += "Перевеса нет: движок не видит ни выигрыша материала, ни решающего удара."
+            return parts.joinToString(" ")
+        }
+
+        val gain = materialGainWord(section.materialSwing ?: 0)
+        if (gain != null) {
+            parts += "В варианте " + line(section.swingLineSan) + " " + SideLexicon.name(leader) +
+                " выигрывают " + gain + "."
+        }
+        section.tactic?.let { tactic ->
+            val statement = statementsFor(listOf(tactic), emptySet(), glossary, RenderMemory()).firstOrNull()
+            if (statement != null) {
+                parts += "Первый удар, после " + line(section.tacticLineSan) + ": " + decapitalize(statement)
+            }
+        }
+        if (parts.size > 1) return parts.joinToString(" ")
+
+        val materialAhead = if (leader == Side.WHITE) section.materialNow else -section.materialNow
+        if (materialAhead >= MATERIAL_EXPLAINS_CP) {
+            parts += "Перевес держится на этом материале."
+            return parts.joinToString(" ")
+        }
+
+        val positional = statementsFor(section.positional, emptySet(), glossary, RenderMemory(), MAX_FACTS_PER_REASON)
+        parts += if (positional.isEmpty()) {
+            "Перевес у " + SideLexicon.name(leader, GrammaticalCase.GENITIVE) +
+                " позиционный, движок видит его в варианте " + line(section.lineSan) + "."
+        } else {
+            "Перевес у " + SideLexicon.name(leader, GrammaticalCase.GENITIVE) + " позиционный. " +
+                positional.joinToString(" ")
+        }
+        return parts.joinToString(" ")
+    }
+
+    private fun materialNowSentence(material: Int): String = when {
+        kotlin.math.abs(material) < MATERIAL_EXPLAINS_CP -> "Материал равный."
+        material > 0 -> "Материал: у белых больше (" + pawnsLabel(material) + ")."
+        else -> "Материал: у чёрных больше (" + pawnsLabel(material) + ")."
+    }
+
+    /** Что выигрывается к спокойной позиции варианта. Null — материал по сути не меняется. */
+    private fun materialGainWord(swing: Int): String? = when {
+        swing >= SeeCalculator.QUEEN_VALUE - GAIN_MARGIN_CP -> "ферзя"
+        swing >= SeeCalculator.ROOK_VALUE - GAIN_MARGIN_CP -> "ладью"
+        swing >= SeeCalculator.KNIGHT_VALUE - GAIN_MARGIN_CP -> "фигуру"
+        swing >= EXCHANGE_MIN_CP -> "качество"
+        swing >= SeeCalculator.PAWN_VALUE - GAIN_MARGIN_CP / 2 -> "пешку"
+        else -> null
+    }
+
+    private const val MATERIAL_EXPLAINS_CP = 80
+    private const val GAIN_MARGIN_CP = 50
+    private const val EXCHANGE_MIN_CP = 150
 
     // ——— ОЦЕНКА ПОЗИЦИИ ———
 
@@ -494,7 +600,7 @@ object TextRenderer {
         // Без конкретики остаётся только мера движка. Называем её в пешках, а не
         // "потерей ладьи": ладья под боем может и не стоять.
         if (dangers.isEmpty() && threat.evidence.engineLine?.score !is Score.Mate &&
-            threat.dropCentipawns >= CoachThresholds.THREAT_STRONG_CP
+            threat.dropCentipawns in CoachThresholds.THREAT_STRONG_CP until COLLAPSE_CP
         ) {
             val pawns = (threat.dropCentipawns + 50) / 100
             parts += "Оценка упадёт примерно на $pawns ${pawnsWord(pawns)}."
@@ -963,7 +1069,7 @@ object TextRenderer {
     /** Все факты разбора разом — чтобы вилка поглощала свои цели по всему тексту, а не только в своём пункте. */
     private fun collectAllFacts(explanation: PositionExplanation): List<Fact> = explanation.sections.flatMap { section ->
         when (section) {
-            is Section.PositionAssessment -> emptyList()
+            is Section.EvalReason, is Section.PositionAssessment -> emptyList()
             is Section.MyPosition ->
                 section.kingSafety + section.loosePieces +
                     section.opponentPlan.flatMap { it.facts } +
@@ -1213,6 +1319,38 @@ object TextRenderer {
         // Молча пропустить безопаснее, чем уронить весь разбор из-за одного
         // предложения.
         is ThreatFact -> ""
+
+        is ForkThreatFact -> {
+            val name = capitalize(PieceLexicon.name(pieceTypeOf(fact.piece)))
+            val targets = russianList(fact.targets.map { namedSquare(fact.evidence, it, GrammaticalCase.ACCUSATIVE) })
+            "$name с ${sq(fact.from)} может пойти на ${sq(fact.to)} и напасть сразу на $targets."
+        }
+
+        is RemoveDefenderFact -> {
+            val capturer = namedSquare(fact.evidence, fact.capturer, GrammaticalCase.NOMINATIVE)
+            val defender = namedSquare(fact.evidence, fact.defender, GrammaticalCase.ACCUSATIVE)
+            val target = namedSquare(fact.evidence, fact.target, GrammaticalCase.GENITIVE)
+            capitalize(capturer) + " может побить " + defender + ": это снимает защиту с " + target + "."
+        }
+
+        is WeakSquareFact -> {
+            "Поле ${sq(fact.square)} рядом с королём ${SideLexicon.name(fact.owner, GrammaticalCase.GENITIVE)} " +
+                "пешкой уже не прикрыть, и соперник на него смотрит."
+        }
+
+        is PawnBreakFact -> "Пешечный удар ${sq(fact.from)}-${sq(fact.to)}: пешка нападает на пешку ${sq(fact.target)} и вскрывает игру."
+
+        is EndgameFact -> endgameStatement(fact)
+    }
+
+    private fun endgameStatement(fact: EndgameFact): String {
+        val owner = SideLexicon.name(fact.owner, GrammaticalCase.GENITIVE)
+        return when (fact.kind) {
+            EndgameKind.ROOK_BEHIND_PASSED -> "Ладья стоит за проходной пешкой ${sq(fact.square)}: с каждым шагом пешки она становится сильнее."
+            EndgameKind.KING_OUTSIDE_SQUARE -> "Пешка ${sq(fact.square)} проходит сама: король не успевает войти в её квадрат."
+            EndgameKind.ACTIVE_KING -> "Король $owner на ${sq(fact.square)} заметно активнее короля соперника."
+            EndgameKind.OPPOSITE_BISHOPS -> "Слоны разноцветные: даже при лишней пешке выиграть такой эндшпиль трудно, это на руку $owner."
+        }
     }
 
     // ——— Мелкие помощники ———

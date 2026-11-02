@@ -1,13 +1,17 @@
 package org.chesscoach.app.ui
 
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -48,6 +52,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlin.math.abs
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -227,14 +232,31 @@ fun GameReviewScreen(
             )
         }
 
-        ChessBoard(
-            fen = fen,
-            // Доска разворачивается так, как её видел игрок за своими фигурами.
-            flipped = game.myColor == PlayerColor.BLACK,
-            lastMoveFrom = positions.getOrNull(currentPly)?.fromSquare,
-            lastMoveTo = positions.getOrNull(currentPly)?.toSquare,
-            arrows = arrows,
-        )
+        // Доска разворачивается так, как её видел игрок за своими фигурами.
+        val flipped = game.myColor == PlayerColor.BLACK
+        // Высоту доске задаём сами: BoxWithConstraints внутри неё не умеет
+        // отвечать на вопрос о собственной высоте, а полоске она нужна.
+        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+            val boardSize = maxWidth - EVAL_BAR_WIDTH - EVAL_BAR_GAP
+            Row(
+                modifier = Modifier.fillMaxWidth().height(boardSize),
+                horizontalArrangement = Arrangement.spacedBy(EVAL_BAR_GAP),
+            ) {
+                ChessBoard(
+                    fen = fen,
+                    modifier = Modifier.width(boardSize),
+                    flipped = flipped,
+                    lastMoveFrom = positions.getOrNull(currentPly)?.fromSquare,
+                    lastMoveTo = positions.getOrNull(currentPly)?.toSquare,
+                    arrows = arrows,
+                )
+                EvalBar(
+                    score = evaluationsByPly[currentPly]?.scoreAfterWhite ?: advice?.scoreFromWhite,
+                    flipped = flipped,
+                    modifier = Modifier.width(EVAL_BAR_WIDTH).fillMaxHeight(),
+                )
+            }
+        }
 
         // Прокручиваемая часть: всё, что ниже доски.
         Column(
@@ -561,6 +583,39 @@ private val EVAL_GRAPH_HEIGHT = 28.dp
  * чёрным. Тап переводит на соответствующий полуход, поэтому график служит
  * ещё и второй, более быстрой лентой ходов.
  */
+private val EVAL_BAR_WIDTH = 22.dp
+private val EVAL_BAR_GAP = 2.dp
+
+/** Полоска оценки как на Lichess: белая часть со стороны белых, число на стороне ведущего. */
+@Composable
+private fun EvalBar(score: Score?, flipped: Boolean, modifier: Modifier = Modifier) {
+    val share by animateFloatAsState(score?.let(ScoreFormat::whiteShare) ?: 0.5f, label = "evalBar")
+    val whiteLeads = share >= 0.5f
+    // Без разворота белые внизу.
+    val labelOnTop = whiteLeads == flipped
+
+    Box(modifier = modifier.background(Color(0xFF2A2A2A))) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(share)
+                .align(if (flipped) Alignment.TopCenter else Alignment.BottomCenter)
+                .background(Color.White),
+        )
+        if (score != null) {
+            Text(
+                ScoreFormat.short(score),
+                color = if (whiteLeads) Color(0xFF2A2A2A) else Color.White,
+                fontSize = 8.sp,
+                maxLines = 1,
+                modifier = Modifier
+                    .align(if (labelOnTop) Alignment.TopCenter else Alignment.BottomCenter)
+                    .padding(vertical = 2.dp),
+            )
+        }
+    }
+}
+
 @Composable
 private fun EvalGraphBar(
     evaluations: List<PlyEvaluation>,

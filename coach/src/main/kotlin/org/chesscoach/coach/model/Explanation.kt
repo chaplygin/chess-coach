@@ -218,7 +218,29 @@ sealed interface Section {
 
     data class Alternatives(val lines: List<AlternativeLine>) : Section
 
+    /**
+     * Почему оценка такая. Материал в сантипешках от лица белых.
+     *
+     * [materialSwing] — сколько материала ведущая сторона прибавляет к концу
+     * [swingLineSan] (спокойная позиция варианта). Null, если спокойной позиции нет.
+     * [tactic] — первый удар в варианте, новый по сравнению с исходной доской.
+     */
+    data class EvalReason(
+        val materialNow: Int,
+        val leader: Side?,
+        val lineSan: List<String>,
+        val materialSwing: Int? = null,
+        val swingLineSan: List<String> = emptyList(),
+        val tactic: Fact? = null,
+        val tacticLineSan: List<String> = emptyList(),
+        val positional: List<Fact> = emptyList(),
+        val mateIn: Int? = null,
+        val matePattern: MatePattern? = null,
+    ) : Section
 }
+
+/** Рисунок мата, проверенный по итоговой доске. */
+enum class MatePattern { SMOTHERED, BACK_RANK }
 
 /**
  * Готовый разбор одной позиции — структура фактов, ещё не текст.
