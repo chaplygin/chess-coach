@@ -11,6 +11,7 @@ import org.chesscoach.coach.model.CoachThresholds
 import org.chesscoach.coach.model.HumanMove
 import org.chesscoach.coach.model.DevelopmentFact
 import org.chesscoach.coach.model.DiscoveredAttackFact
+import org.chesscoach.coach.model.ExchangeFact
 import org.chesscoach.coach.model.EndgameFact
 import org.chesscoach.coach.model.Fact
 import org.chesscoach.coach.model.ForkThreatFact
@@ -230,6 +231,7 @@ class PipelineOrchestrator(
             loosePieces = loosePieces,
             threat = threat,
             opponentPlan = PlanBuilder.build(features, opponent),
+            exchanges = features.favouring(opponent).filterIsInstance<ExchangeFact>(),
         )
     }
 
@@ -251,6 +253,7 @@ class PipelineOrchestrator(
             captures = captures,
             activity = activity,
             plan = PlanBuilder.build(features, mover),
+            exchanges = mine.filterIsInstance<ExchangeFact>(),
         )
     }
 

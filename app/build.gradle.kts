@@ -19,8 +19,7 @@ android {
         versionCode = buildNumber
         versionName = "0.2.$buildNumber"
 
-        // Телефон пользователя — arm64. Одна ABI держит APK минимальным,
-        // а бинарник Stockfish (~76 МБ) добавится сюда же в M1.
+        // Телефон пользователя — arm64. Одна ABI держит APK минимальным.
         ndk { abiFilters += "arm64-v8a" }
     }
 
@@ -45,8 +44,12 @@ android {
         debug {
             fixedSigning?.let { signingConfig = it }
         }
+        // Без постоянного ключа (pull request) сборка подписывается отладочным и никуда не уходит.
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = fixedSigning ?: signingConfigs.getByName("debug")
         }
     }
 

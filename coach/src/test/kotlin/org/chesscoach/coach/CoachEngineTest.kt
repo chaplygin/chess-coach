@@ -16,7 +16,7 @@ class CoachEngineTest {
         // Детектор, забытый в этом списке, нигде больше не всплывёт: разбор
         // просто станет беднее, и заметить это по тестам самих детекторов
         // невозможно — они-то проходят.
-        assertEquals(16, CoachEngine.ALL_DETECTORS.size)
+        assertEquals(17,CoachEngine.ALL_DETECTORS.size)
         assertEquals(
             CoachEngine.ALL_DETECTORS.size,
             CoachEngine.ALL_DETECTORS.map { it.name }.distinct().size,

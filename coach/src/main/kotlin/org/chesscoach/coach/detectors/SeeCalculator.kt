@@ -23,6 +23,9 @@ object SeeCalculator {
     const val ROOK_VALUE = 500
     const val QUEEN_VALUE = 900
 
+    /** С этой разницы взятие считается выигрышем материала, а не почти равным разменом. */
+    const val WINNING_MIN_CP = 50
+
     /** Условная цена короля — только чтобы сравнивать "кем бить первым". Короля по-настоящему никогда не берут. */
     const val KING_VALUE = 20_000
 
@@ -93,6 +96,26 @@ object SeeCalculator {
         val after = working.clone()
         after.doMove(move)
         return FirstCapture(move.from, after.legalMoves().any { it.to == target })
+    }
+
+    /**
+     * Итог размена, если первое взятие на [target] всё же сделано, со знаком:
+     * в отличие от [evaluateSquare], минус здесь остаётся минусом. Null — бить нечем.
+     */
+    fun firstCaptureDelta(board: Board, target: Square, attacker: Side): Int? {
+        val working = board.clone()
+        if (working.sideToMove != attacker) {
+            working.sideToMove = attacker
+            working.enPassant = Square.NONE
+            working.enPassantTarget = Square.NONE
+        }
+        if (working.isKingAttacked) return null
+
+        val captures = working.legalMoves().filter { it.to == target }
+        val move = captures.minByOrNull { pieceValue(working.getPiece(it.from)) } ?: return null
+        val victimValue = pieceValue(working.getPiece(target))
+        working.doMove(move)
+        return victimValue - exchange(working, target)
     }
 
     /**

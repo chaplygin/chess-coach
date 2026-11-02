@@ -146,6 +146,7 @@ sealed interface Section {
         val loosePieces: List<Fact>,
         val threat: ThreatFact? = null,
         val opponentPlan: List<PlanStep> = emptyList(),
+        val exchanges: List<ExchangeFact> = emptyList(),
     ) : Section
 
     /** Моя атака: чем я могу наказать соперника, и к чему веду дело. */
@@ -154,6 +155,7 @@ sealed interface Section {
         val captures: List<Fact>,
         val activity: List<Fact>,
         val plan: List<PlanStep> = emptyList(),
+        val exchanges: List<ExchangeFact> = emptyList(),
     ) : Section
 
     /**

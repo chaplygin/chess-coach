@@ -15,6 +15,7 @@ import org.chesscoach.coach.model.CenterControlFact
 import org.chesscoach.coach.model.CoachThresholds
 import org.chesscoach.coach.model.DevelopmentFact
 import org.chesscoach.coach.model.DiscoveredAttackFact
+import org.chesscoach.coach.model.ExchangeFact
 import org.chesscoach.coach.model.Evidence
 import org.chesscoach.coach.model.Fact
 import org.chesscoach.coach.model.FeatureSet
@@ -252,5 +253,7 @@ class ReasonDiffAnalyzer(
         // Возможность на следующий ход не объясняет сам ход: соперник успевает ответить.
         is ForkThreatFact -> null
         is PawnBreakFact -> null
+        // Справка, а не причина хода: материал почти не меняется.
+        is ExchangeFact -> null
     }
 }

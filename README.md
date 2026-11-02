@@ -28,8 +28,9 @@ gh workflow run "Build APK"
 gh run download --name chesscoach-debug
 ```
 
-Движок Stockfish (~76 МБ) не хранится в репозитории: CI скачивает его из релиза
-`sf_19` и кладёт в `app/src/main/jniLibs/arm64-v8a/libstockfish.so`.
+Движок не хранится в репозитории: CI собирает Stockfish с маленькой сетью из
+исходников `stockfish.js` (`tools/ci/build_stockfish_lite.sh`) и кладёт его в
+`app/src/main/jniLibs/arm64-v8a/libstockfish.so`.
 
 ## Обновления
 

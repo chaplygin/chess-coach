@@ -21,6 +21,11 @@ import org.chesscoach.coach.model.Fact
  * как в стартовой позиции. Прямой ход пешки вперёд её не уводит: она там же
  * и остаётся, поэтому его недостаточно — нужен ход, после которого дальнобойщик
  * реально бьёт цель.
+ *
+ * Линии мало: удар должен что-то давать. Поэтому цель — либо король (вскрытый
+ * шах), либо фигура, которую после ухода блокирующей становится выгодно забрать
+ * и которую нельзя было так же забрать до этого. Пешка под защитой пешки или
+ * слон под защитой, которого бьёт ферзь, ударом не считаются.
  */
 class DiscoveredAttackDetector : Detector {
     override val name: String = "discovered_attack"
@@ -63,8 +68,9 @@ class DiscoveredAttackDetector : Detector {
 
     /**
      * Есть ли у фигуры на [moving] законный ход, после которого дальнобойщик
-     * с [square] действительно бьёт [target]. Пешка, шагнувшая вперёд по той
-     * же вертикали, линию не открывает — считается только реальный уход с луча.
+     * с [square] действительно бьёт [target] и что-то этим выигрывает. Пешка,
+     * шагнувшая вперёд по той же вертикали, линию не открывает — считается
+     * только реальный уход с луча.
      */
     private fun canStepOffRay(
         board: Board,
@@ -77,11 +83,20 @@ class DiscoveredAttackDetector : Detector {
         val working = board.clone()
         if (working.sideToMove != side) working.sideToMove = side
 
-        return working.legalMoves().filter { it.from == moving }.any { move ->
+        val targetIsKing = board.getPiece(target).pieceType == PieceType.KING
+        val gainBefore = if (targetIsKing) 0 else SeeCalculator.evaluateSquare(board, target, side)
+
+        return working.legalMoves().filter { it.from == moving && it.to != target }.any { move ->
             val after = working.clone()
             after.doMove(move)
-            RayUtil.slidingAttacks(sliderType, square, after.getBitboard()) and target.bitboard != 0L
+            val opened = RayUtil.slidingAttacks(sliderType, square, after.getBitboard()) and target.bitboard != 0L
+            opened && (targetIsKing || winsMaterial(after, target, side, gainBefore))
         }
+    }
+
+    private fun winsMaterial(after: Board, target: Square, side: Side, gainBefore: Int): Boolean {
+        val gain = SeeCalculator.evaluateSquare(after, target, side)
+        return gain >= SeeCalculator.WINNING_MIN_CP && gain > gainBefore
     }
 
     private companion object {

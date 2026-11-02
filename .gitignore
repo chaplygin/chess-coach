@@ -5,7 +5,7 @@ local.properties
 *.apk
 *.aab
 
-# Stockfish скачивается в CI, а не хранится в репозитории (76 МБ)
+# Stockfish собирается в CI, а не хранится в репозитории
 app/src/main/jniLibs/
 
 # IDE

@@ -101,6 +101,18 @@ data class HangingPieceFact(
     val defended: Boolean = false,
 ) : Fact
 
+/**
+ * Почти равный размен: [attacker] может взять на [square], и материал почти не
+ * меняется. [deltaCentipawns] со знаком, с точки зрения того, кто берёт первым.
+ */
+data class ExchangeFact(
+    val square: Square,
+    val attacker: Square,
+    val deltaCentipawns: Int,
+    override val favours: Side,
+    override val evidence: Evidence,
+) : Fact
+
 data class ForkFact(
     val from: Square,
     val piece: Piece,

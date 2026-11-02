@@ -2,7 +2,8 @@ name: Build APK
 
 on:
   push:
-    branches: [main]
+    # Ветки smoke/** проверяют сборку в эмуляторе и ничего не публикуют.
+    branches: [main, 'smoke/**']
   pull_request:
   workflow_dispatch:
 
@@ -45,16 +46,23 @@ jobs:
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
 
-      # Бинарник 76 МБ в git не кладём — CI берёт его из релиза Stockfish.
-      - name: Fetch Stockfish binary
-        env:
-          STOCKFISH_RELEASE_TAG: sf_19
-          STOCKFISH_ASSET: stockfish-android-arm64-universal.tar.gz
-          JNI_LIBS_DIR: app/src/main/jniLibs/arm64-v8a
-        run: ./tools/ci/fetch_stockfish.sh
+      # Бинарник в git не кладём. Он меняется только с коммитом исходников в
+      # скрипте, поэтому собирается один раз, а дальше берётся из кэша.
+      - name: Restore Stockfish lite
+        id: stockfish-cache
+        uses: actions/cache@v4
+        with:
+          path: app/src/main/jniLibs/arm64-v8a/libstockfish.so
+          key: stockfish-lite-${{ hashFiles('tools/ci/build_stockfish_lite.sh') }}
 
-      # Android 15+ работает на устройствах со страницей 16 КБ. Бинарник собран
-      # не нами, поэтому выравнивание проверяем, а не предполагаем.
+      - name: Build Stockfish lite
+        if: steps.stockfish-cache.outputs.cache-hit != 'true'
+        env:
+          JNI_LIBS_DIR: app/src/main/jniLibs/arm64-v8a
+        run: bash tools/ci/build_stockfish_lite.sh
+
+      # Android 15+ работает на устройствах со страницей 16 КБ, поэтому
+      # выравнивание проверяем, а не предполагаем.
       - name: Check 16 KB page alignment
         run: python3 tools/ci/check_elf_align.py app/src/main/jniLibs/arm64-v8a/libstockfish.so
 
@@ -73,19 +81,19 @@ jobs:
           echo "$SIGNING_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release-signing.p12"
           echo "SIGNING_KEYSTORE_PATH=$RUNNER_TEMP/release-signing.p12" >> "$GITHUB_ENV"
 
-      - name: Assemble debug APK
+      - name: Assemble release APK
         env:
           SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
-        run: ./gradlew :app:assembleDebug --stacktrace
+        run: ./gradlew :app:assembleRelease --stacktrace
 
       - name: Stage APK with a traceable name
         run: |
           set -euo pipefail
           mkdir -p out
-          cp app/build/outputs/apk/debug/app-debug.apk "out/chesscoach-0.2.${GITHUB_RUN_NUMBER}.apk"
+          cp app/build/outputs/apk/release/app-release.apk "out/chesscoach-0.2.${GITHUB_RUN_NUMBER}.apk"
           ls -lh out/
           # Пустой jniLibs не ломает сборку — ошибка вылезла бы только на телефоне.
-          if unzip -l app/build/outputs/apk/debug/app-debug.apk | grep -q 'lib/arm64-v8a/libstockfish.so'; then
+          if unzip -l app/build/outputs/apk/release/app-release.apk | grep -q 'lib/arm64-v8a/libstockfish.so'; then
             echo "Проверено: libstockfish.so внутри APK"
           else
             echo "ОШИБКА: libstockfish.so не попал в APK" >&2
@@ -132,6 +140,47 @@ jobs:
             core/build/reports/tests/
             coach/build/reports/tests/
             lichess/build/reports/tests/
+          retention-days: 7
+
+  smoke:
+    if: startsWith(github.ref, 'refs/heads/smoke/')
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download APK
+        uses: actions/download-artifact@v4
+        with:
+          name: chesscoach-debug
+          path: apk
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run in emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 31
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          script: bash tools/ci/smoke_emulator.sh
+
+      - name: Upload smoke results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-results
+          path: |
+            smoke-screen.png
+            smoke-logcat.txt
           retention-days: 7
 
   web:

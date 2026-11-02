@@ -27,7 +27,8 @@ class HangingDetector : Detector {
 
             val attacker = piece.pieceSide.flip()
             val loss = SeeCalculator.evaluateSquare(board, square, attacker)
-            if (loss > 0) {
+            // Меньше порога — почти равный размен, им занимается ExchangeDetector.
+            if (loss >= SeeCalculator.WINNING_MIN_CP) {
                 // Поле нападающего кладём в доказательство вместе с фигурой на
                 // нём: назвать причину ("бьёт пешка e4") потом будет неоткуда —
                 // факт может дожить до текста, относящегося к другой доске.

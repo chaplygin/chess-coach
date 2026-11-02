@@ -11,6 +11,7 @@ import org.chesscoach.coach.model.CoachThresholds
 import org.chesscoach.coach.model.DevelopmentFact
 import org.chesscoach.coach.model.DiscoveredAttackFact
 import org.chesscoach.coach.model.Evidence
+import org.chesscoach.coach.model.ExchangeFact
 import org.chesscoach.coach.model.Fact
 import org.chesscoach.coach.model.GamePhase
 import org.chesscoach.coach.model.ForkFact
@@ -87,6 +88,9 @@ object TextRenderer {
 
     /** В угрозе — сам ход соперника и не больше двух следствий, объясняющих опасность. */
     private const val MAX_THREAT_CONSEQUENCES = 2
+
+    /** Размены — справка: длинный список заслонил бы то, что действительно выигрывает материал. */
+    private const val MAX_EXCHANGES = 3
 
     /** Разбирать материал начинаем со старших фигур: лишний ферзь важнее лишней пешки. */
     private val MATERIAL_ORDER = listOf(
@@ -525,7 +529,7 @@ object TextRenderer {
     ): String {
         val threat = section.threat
         val threatSentences = threatSentences(threat, pool, glossary, memory, forkedSquares)
-        val threatIsMate = threat?.evidence?.engineLine?.score is Score.Mate
+        val threatIsMate = threat != null && threatMates(threat)
         val threatIsCapture = !threatIsMate && threat?.opponentMoveSan?.contains('x') == true
 
         val (backRank, loose) = section.loosePieces.partition { it is BackRankFact }
@@ -537,6 +541,7 @@ object TextRenderer {
             active = threatSentences.takeUnless { threatIsMate || threatIsCapture }.orEmpty() +
                 statementsFor(section.kingSafety, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON) +
                 planSentences(section.opponentPlan, glossary, forkedSquares, forOpponent = true),
+            exchanges = statementsFor(section.exchanges, forkedSquares, glossary, memory, MAX_EXCHANGES),
         )
     }
 
@@ -550,12 +555,20 @@ object TextRenderer {
         captures = statementsFor(section.captures, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON),
         active = statementsFor(section.activity, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON) +
             planSentences(section.plan, glossary, forkedSquares, forOpponent = false),
+        exchanges = statementsFor(section.exchanges, forkedSquares, glossary, memory, MAX_EXCHANGES),
     )
 
-    private fun checkList(mates: List<String>, captures: List<String>, active: List<String>): String = listOf(
+    /** Размены — справка, а не пункт проверки: нет разменов, нет и строки. */
+    private fun checkList(
+        mates: List<String>,
+        captures: List<String>,
+        active: List<String>,
+        exchanges: List<String>,
+    ): String = listOfNotNull(
         sentencesLine("1. Маты", mates),
         sentencesLine("2. Взятия", captures),
         sentencesLine("3. Активные ходы", active),
+        exchanges.takeIf { it.isNotEmpty() }?.let { sentencesLine("Размены (справочно)", it) },
     ).joinToString(System.lineSeparator())
 
     /**
@@ -580,7 +593,12 @@ object TextRenderer {
         if (threat == null) return emptyList()
 
         val parts = mutableListOf(pool.choose(threat, threatIntroTemplates))
-        if (threat.evidence.engineLine?.score is Score.Mate) parts += "Дело идёт к мату."
+        // При мате о материале не говорим: "конь под боем" считалось бы на доске,
+        // где партия уже кончилась или вот-вот кончится.
+        if (threatMates(threat)) {
+            parts += "Дело идёт к мату."
+            return parts
+        }
 
         // Не любой факт, который сработал после хода соперника, объясняет, чем
         // этот ход опасен: отсталая пешка или чужая подвижность тут ни при чём.
@@ -599,7 +617,7 @@ object TextRenderer {
 
         // Без конкретики остаётся только мера движка. Называем её в пешках, а не
         // "потерей ладьи": ладья под боем может и не стоять.
-        if (dangers.isEmpty() && threat.evidence.engineLine?.score !is Score.Mate &&
+        if (dangers.isEmpty() &&
             threat.dropCentipawns in CoachThresholds.THREAT_STRONG_CP until COLLAPSE_CP
         ) {
             val pawns = (threat.dropCentipawns + 50) / 100
@@ -608,6 +626,10 @@ object TextRenderer {
 
         return parts
     }
+
+    /** Строка движка считана за соперника, поэтому положительный счёт — мат ставит он. */
+    private fun threatMates(threat: ThreatFact): Boolean =
+        (threat.evidence.engineLine?.score as? Score.Mate)?.let { it.movesToMate > 0 } == true
 
     /** Фигуры под боем у той самой фигуры, что ходит угрозой: это двойной удар, а не отдельные потери. */
     private fun threatDoubleAttack(
@@ -1071,12 +1093,12 @@ object TextRenderer {
         when (section) {
             is Section.EvalReason, is Section.PositionAssessment -> emptyList()
             is Section.MyPosition ->
-                section.kingSafety + section.loosePieces +
+                section.kingSafety + section.loosePieces + section.exchanges +
                     section.opponentPlan.flatMap { it.facts } +
                     (section.threat?.consequences ?: emptyList())
 
             is Section.MyAttack ->
-                section.mate + section.captures + section.activity + section.plan.flatMap { it.facts }
+                section.mate + section.captures + section.activity + section.exchanges + section.plan.flatMap { it.facts }
 
             is Section.WhyThisMove -> section.reasons.flatMap { it.facts }
             is Section.PlayedMove -> section.missed + section.punishment
@@ -1155,6 +1177,12 @@ object TextRenderer {
         is HangingPieceFact -> {
             val name = capitalize(PieceLexicon.name(pieceTypeOf(fact.piece)))
             "$name на ${sq(fact.square)} под боем${hangingReason(fact)}."
+        }
+
+        is ExchangeFact -> {
+            val attacker = capitalize(namedSquare(fact.evidence, fact.attacker, GrammaticalCase.NOMINATIVE))
+            val victim = namedSquare(fact.evidence, fact.square, GrammaticalCase.ACCUSATIVE)
+            "$attacker берёт $victim, дельта ${pawnsLabel(fact.deltaCentipawns)}."
         }
 
         is TrappedPieceFact -> {

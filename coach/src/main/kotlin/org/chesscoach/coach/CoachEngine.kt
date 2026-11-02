@@ -5,6 +5,7 @@ import org.chesscoach.coach.detectors.BackRankDetector
 import org.chesscoach.coach.detectors.DevelopmentDetector
 import org.chesscoach.coach.detectors.Detector
 import org.chesscoach.coach.detectors.DiscoveredAttackDetector
+import org.chesscoach.coach.detectors.ExchangeDetector
 import org.chesscoach.coach.detectors.EndgameDetector
 import org.chesscoach.coach.detectors.FeatureSetBuilder
 import org.chesscoach.coach.detectors.ForkDetector
@@ -101,6 +102,7 @@ class CoachEngine(engineClient: EngineClient) {
          */
         val ALL_DETECTORS: List<Detector> = listOf(
             HangingDetector(),
+            ExchangeDetector(),
             ForkDetector(),
             PinSkewerDetector(),
             DiscoveredAttackDetector(),
