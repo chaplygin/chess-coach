@@ -126,7 +126,78 @@ class TextRendererNewSectionsTest {
 
         // После двоеточия строчная буква: это продолжение строки, а не новое
         // предложение.
-        assertTrue(text, text.contains("2. Взятия: слон на d3 потерян"))
+        assertTrue(text, text.contains("2. Взятия: слон на d3 под боем"))
+    }
+
+    @Test
+    fun `a defended piece that still loses the exchange says why in plain words`() {
+        val pieces = mapOf(Square.E5 to Piece.BLACK_PAWN, Square.D4 to Piece.WHITE_PAWN)
+        val hanging = HangingPieceFact(
+            square = Square.E5,
+            piece = Piece.BLACK_PAWN,
+            lossCentipawns = 100,
+            favours = Side.WHITE,
+            evidence = Evidence(squares = listOf(Square.E5, Square.D4), pieces = pieces),
+            firstAttacker = Square.D4,
+            defended = true,
+        )
+        val text = TextRenderer.render(explanation(listOf(Section.MyPosition(emptyList(), listOf(hanging)))))
+
+        assertTrue(text, text.contains("пешка на e5 под боем (бьёт пешка d4, взять обратно невыгодно)"))
+    }
+
+    private fun threat(san: String, uci: String, drop: Int, consequences: List<org.chesscoach.coach.model.Fact>) =
+        org.chesscoach.coach.model.ThreatFact(
+            opponentMoveUci = uci,
+            opponentMoveSan = san,
+            dropCentipawns = drop,
+            consequences = consequences,
+            favours = Side.BLACK,
+            evidence = Evidence.of(Square.D4),
+        )
+
+    private fun hitBy(square: Square, piece: Piece, attacker: Square) = HangingPieceFact(
+        square = square,
+        piece = piece,
+        lossCentipawns = 300,
+        favours = Side.BLACK,
+        evidence = Evidence(
+            squares = listOf(square, attacker),
+            pieces = mapOf(square to piece, attacker to Piece.BLACK_PAWN),
+        ),
+        firstAttacker = attacker,
+    )
+
+    @Test
+    fun `two pieces hit by the threatening move are one double attack in the future tense`() {
+        val threat = threat(
+            "exd4",
+            "e5d4",
+            500,
+            listOf(hitBy(Square.C3, Piece.WHITE_KNIGHT, Square.D4), hitBy(Square.E3, Piece.WHITE_BISHOP, Square.D4)),
+        )
+        val text = TextRenderer.render(explanation(listOf(Section.MyPosition(emptyList(), emptyList(), threat))))
+
+        // На текущей доске этой пешки на d4 нет, и теряется одна фигура, а не обе.
+        assertTrue(text, text.contains("Пешка на d4 нападёт сразу на коня c3 и слона e3, все не спасти."))
+        assertFalse(text, text.contains("под боем"))
+        assertFalse(text, text.contains("ладьи"))
+    }
+
+    @Test
+    fun `a single consequence of the threat is placed after the move`() {
+        val threat = threat("exd4", "e5d4", 300, listOf(hitBy(Square.C3, Piece.WHITE_KNIGHT, Square.D4)))
+        val text = TextRenderer.render(explanation(listOf(Section.MyPosition(emptyList(), emptyList(), threat))))
+
+        assertTrue(text, text.contains("После этого конь на c3 под боем"))
+    }
+
+    @Test
+    fun `a threat with nothing concrete gives the engine measure in pawns`() {
+        val threat = threat("Ng4", "f6g4", 500, emptyList())
+        val text = TextRenderer.render(explanation(listOf(Section.MyPosition(emptyList(), emptyList(), threat))))
+
+        assertTrue(text, text.contains("Оценка упадёт примерно на 5 пешек."))
     }
 
     // ——— МОЙ ПЛАН ———

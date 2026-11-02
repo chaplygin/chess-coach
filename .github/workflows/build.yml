@@ -161,7 +161,8 @@ jobs:
 
   deploy-web:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    needs: web
+    # Сайт выходит только вместе с APK: при упавшей сборке версии не разойдутся.
+    needs: [build, web]
     runs-on: ubuntu-latest
     permissions:
       pages: write

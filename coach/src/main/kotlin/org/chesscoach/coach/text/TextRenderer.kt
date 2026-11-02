@@ -95,11 +95,6 @@ object TextRenderer {
     /** Выше этого числа точная цифра теряет смысл: упущенный мат даёт десятки пешек. */
     private const val COLLAPSE_CP = 1000
 
-    /** Шкала для масштаба угрозы — в цене фигур, а не в сантипешках. */
-    private const val MINOR_SCALE_CP = 300
-    private const val ROOK_SCALE_CP = 500
-    private const val QUEEN_SCALE_CP = 900
-
     fun render(explanation: PositionExplanation): String {
         val glossary = Glossary()
         val pool = TemplatePool(explanation.fen)
@@ -479,44 +474,53 @@ object TextRenderer {
         if (threat == null) return emptyList()
 
         val parts = mutableListOf(pool.choose(threat, threatIntroTemplates))
-        if (threat.dropCentipawns >= CoachThresholds.THREAT_STRONG_CP) {
-            // Точку у шаблона снимаем и ставим заново после скобки: оценка
-            // "серьёзная" без масштаба — это интонация, а не информация, и
-            // читатель вправе спросить, насколько серьёзная.
-            val severity = pool.choose(threat, threatSeverityTemplates).removeSuffix(".")
-            parts += severity + " (" + threatScale(threat) + ")."
-        }
+        if (threat.evidence.engineLine?.score is Score.Mate) parts += "Дело идёт к мату."
+
         // Не любой факт, который сработал после хода соперника, объясняет, чем
         // этот ход опасен: отсталая пешка или чужая подвижность тут ни при чём.
         // Опасность — это то, что реально сыпется: материал, король, мат.
-        parts += statementsFor(
-            threat.consequences.filter { explainsDanger(it) },
-            forkedSquares,
-            glossary,
-            memory,
-            MAX_THREAT_CONSEQUENCES,
-        )
+        val dangers = threat.consequences.filter { explainsDanger(it) }
+        val doubleAttack = threatDoubleAttack(threat, dangers, forkedSquares)
+        if (doubleAttack.isNotEmpty()) parts += doubleAttackSentence(doubleAttack)
+
+        // Детекторы смотрели на доску после хода соперника, поэтому их фразы
+        // надо явно отнести к будущему: на текущей доске той пешки ещё нет.
+        val statements = statementsFor(dangers - doubleAttack.toSet(), forkedSquares, glossary, memory, MAX_THREAT_CONSEQUENCES)
+        if (statements.isNotEmpty()) {
+            val lead = if (statements.size == 1) "После этого " else "После этого: "
+            parts += lead + statements.joinToString("; ") { decapitalize(it.removeSuffix(".")) } + "."
+        }
+
+        // Без конкретики остаётся только мера движка. Называем её в пешках, а не
+        // "потерей ладьи": ладья под боем может и не стоять.
+        if (dangers.isEmpty() && threat.evidence.engineLine?.score !is Score.Mate &&
+            threat.dropCentipawns >= CoachThresholds.THREAT_STRONG_CP
+        ) {
+            val pawns = (threat.dropCentipawns + 50) / 100
+            parts += "Оценка упадёт примерно на $pawns ${pawnsWord(pawns)}."
+        }
 
         return parts
     }
 
-    /**
-     * Насколько велика угроза — словами, а не в сантипешках.
-     *
-     * Число просадки в тексте разбора не появляется никогда (см. контракт
-     * класса), но и молчать о масштабе нельзя: "угроза серьёзная" без меры
-     * звучит одинаково и когда теряется пешка, и когда ферзь. Меру даём
-     * привычной шахматисту шкалой — в фигурах.
-     */
-    private fun threatScale(threat: ThreatFact): String {
-        if (threat.evidence.engineLine?.score is Score.Mate) return "дело идёт к мату"
-        return when {
-            threat.dropCentipawns >= QUEEN_SCALE_CP -> "потеря примерно ферзя"
-            threat.dropCentipawns >= ROOK_SCALE_CP -> "потеря примерно ладьи"
-            threat.dropCentipawns >= MINOR_SCALE_CP -> "потеря примерно лёгкой фигуры"
-            threat.dropCentipawns >= PAWN_MAGNITUDE_CP -> "потеря больше пешки"
-            else -> "потеря примерно пешки"
+    /** Фигуры под боем у той самой фигуры, что ходит угрозой: это двойной удар, а не отдельные потери. */
+    private fun threatDoubleAttack(
+        threat: ThreatFact,
+        dangers: List<Fact>,
+        forkedSquares: Set<Square>,
+    ): List<HangingPieceFact> {
+        val destination = threat.opponentMoveUci.drop(2).take(2).uppercase()
+        val hit = dangers.filterIsInstance<HangingPieceFact>().filter {
+            it.square !in forkedSquares && it.firstAttacker?.toString() == destination
         }
+        return if (hit.size >= 2) hit else emptyList()
+    }
+
+    private fun doubleAttackSentence(hit: List<HangingPieceFact>): String {
+        val attacker = hit.first().firstAttacker ?: return ""
+        val piece = hit.first().evidence.pieceAt(attacker) ?: return ""
+        val targets = russianList(hit.map { namedSquare(it.evidence, it.square, GrammaticalCase.ACCUSATIVE) })
+        return "${capitalize(PieceLexicon.name(pieceTypeOf(piece)))} на ${sq(attacker)} нападёт сразу на $targets, все не спасти."
     }
 
     /**
@@ -547,12 +551,6 @@ object TextRenderer {
         { t -> "Если ничего не предпринять, ${SideLexicon.name(t.favours)} сыграют ${SanRuFormatter.move(t.opponentMoveSan)}." },
         { t -> "Стоит зазеваться — и ${SideLexicon.name(t.favours)} проведут ${SanRuFormatter.move(t.opponentMoveSan)}." },
         { t -> "Без ответа ${SideLexicon.name(t.favours)} тут же играют ${SanRuFormatter.move(t.opponentMoveSan)}." },
-    )
-
-    private val threatSeverityTemplates: List<(ThreatFact) -> String> = listOf(
-        { "Угроза серьёзная." },
-        { "Это уже ощутимая потеря." },
-        { "Терпеть такое нельзя." },
     )
 
     private fun explainsDanger(fact: Fact): Boolean = when (fact) {
@@ -959,9 +957,6 @@ object TextRenderer {
 
     // ——— Дедупликация и отбор фактов ———
 
-    /** До скольки сантипешек перевес ещё называется "лишняя пешка", а не "лишнее качество". */
-    private const val PAWN_MAGNITUDE_CP = 150
-
     /** До скольки сантипешек перевес называется "лишнее качество", а не "заметный материальный перевес". */
     private const val EXCHANGE_MAGNITUDE_CP = 300
 
@@ -1052,9 +1047,8 @@ object TextRenderer {
      */
     private fun renderFactStatement(fact: Fact, glossary: Glossary): String = when (fact) {
         is HangingPieceFact -> {
-            val gender = PieceLexicon.genderOf(pieceTypeOf(fact.piece))
             val name = capitalize(PieceLexicon.name(pieceTypeOf(fact.piece)))
-            "$name на ${sq(fact.square)} ${PieceLexicon.Agreements.LOST.agree(gender)}${hangingReason(fact)}."
+            "$name на ${sq(fact.square)} под боем${hangingReason(fact)}."
         }
 
         is TrappedPieceFact -> {
@@ -1236,10 +1230,10 @@ object TextRenderer {
         val attacker = fact.firstAttacker ?: return ""
         val piece = fact.evidence.pieceAt(attacker) ?: return ""
         val attackerName = PieceLexicon.name(pieceTypeOf(piece))
-        // "Защиты нет" и "размен не выручает" — разные вещи: во втором случае
+        // "Защиты нет" и "взять обратно невыгодно" — разные вещи: во втором случае
         // взять обратно есть чем, но размен всё равно проигран, и советовать
         // "защити фигуру" было бы вредным советом.
-        val verdict = if (fact.defended) "размен не выручает" else "защиты нет"
+        val verdict = if (fact.defended) "взять обратно невыгодно" else "защиты нет"
         return " (бьёт $attackerName ${sq(attacker)}, $verdict)"
     }
 
@@ -1290,6 +1284,17 @@ object TextRenderer {
             mod10 == 1 -> "ход"
             mod10 in 2..4 -> "хода"
             else -> "ходов"
+        }
+    }
+
+    private fun pawnsWord(n: Int): String {
+        val mod100 = kotlin.math.abs(n) % 100
+        val mod10 = mod100 % 10
+        return when {
+            mod100 in 11..14 -> "пешек"
+            mod10 == 1 -> "пешку"
+            mod10 in 2..4 -> "пешки"
+            else -> "пешек"
         }
     }
 }

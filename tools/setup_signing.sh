@@ -11,7 +11,7 @@ PASS="$DIR/release-signing.password"
 for tool in gh keytool openssl; do
   command -v "$tool" > /dev/null || { echo "Не найдено: $tool. Установите его и запустите снова."; exit 1; }
 done
-gh auth status > /dev/null || { echo "Сначала выполните: gh auth login"; exit 1; }
+gh auth status --active > /dev/null || { echo "Сначала выполните: gh auth login"; exit 1; }
 
 # Подмена ключа после первого релиза сломала бы обновления на всех телефонах.
 if gh secret list --repo "$REPO" | grep -q SIGNING_KEYSTORE_BASE64; then

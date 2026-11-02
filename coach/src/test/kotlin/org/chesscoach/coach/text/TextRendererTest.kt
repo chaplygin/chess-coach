@@ -70,8 +70,8 @@ class TextRendererTest {
         val knightText = TextRenderer.render(explanation(listOf(knightSection)))
         val rookText = TextRenderer.render(explanation(listOf(rookSection)))
 
-        assertTrue("expected 'потерян' for the knight, got: $knightText", knightText.contains("Конь на d5 потерян"))
-        assertTrue("expected 'потеряна' for the rook, got: $rookText", rookText.contains("Ладья на d5 потеряна"))
+        assertTrue(knightText, knightText.contains("Конь на d5 под боем"))
+        assertTrue(rookText, rookText.contains("Ладья на d5 под боем"))
     }
 
     @Test

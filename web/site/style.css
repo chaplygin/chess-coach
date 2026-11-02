@@ -55,6 +55,7 @@ a { color: var(--accent); }
 .top { border-bottom: 1px solid var(--line); }
 .foot { border-top: 1px solid var(--line); font-size: 14px; color: var(--muted); justify-content: flex-start; }
 .brand { font-weight: 650; font-size: 18px; color: var(--text); text-decoration: none; }
+.version { font-weight: 400; font-size: 14px; color: var(--muted); }
 .account { display: flex; align-items: center; gap: 12px; font-size: 14px; }
 
 main { flex: 1; width: 100%; max-width: 1180px; margin: 0 auto; padding: 16px; }

@@ -109,7 +109,7 @@ class TextRendererEditorialTest {
 
         val text = TextRenderer.render(explanation(listOf(reasonSection(queenHangingAtMove, queenHangingAtReply))))
 
-        val occurrences = Regex("Ферзь на e2 потерян").findAll(text).count()
+        val occurrences = Regex("Ферзь на e2 под боем").findAll(text).count()
         assertEquals(1, occurrences)
     }
 
@@ -131,8 +131,7 @@ class TextRendererEditorialTest {
         val text = TextRenderer.render(explanation(listOf(reasonSection(rookHanging, queenHanging, fork))))
 
         assertTrue(text, text.contains("вилкой нападает сразу на ладью d1 и ферзя e2"))
-        assertFalse(text, text.contains("потеряна"))
-        assertFalse(text, text.contains("Ферзь на e2 потерян"))
+        assertFalse(text, text.contains("под боем"))
     }
 
     @Test
@@ -183,7 +182,7 @@ class TextRendererEditorialTest {
         val text = TextRenderer.render(explanation(listOf(reasonSection(*facts.toTypedArray()))))
 
         val whyThisMove = text.substringAfter("ЛУЧШИЙ ХОД")
-        assertEquals(2, Regex("потеряна").findAll(whyThisMove).count())
+        assertEquals(2, Regex("под боем").findAll(whyThisMove).count())
     }
 
     @Test
@@ -208,9 +207,8 @@ class TextRendererEditorialTest {
 
         assertFalse(threatBlock, threatBlock.contains("отсталая"))
         assertFalse(threatBlock, threatBlock.contains("пространства для манёвра"))
-        // "потерян" — общая часть и мужской, и женской формы ("потерян"/"потеряна"),
-        // так что подсчёт не зависит от того, какие два факта из трёх выживут при обрезке.
-        assertEquals(2, Regex("потерян").findAll(threatBlock).count())
+        assertTrue(threatBlock, threatBlock.contains("После этого: "))
+        assertEquals(2, Regex("под боем").findAll(threatBlock).count())
     }
 
     // ——— Сноска не ломает предложение (пункт 4 правки) ———
