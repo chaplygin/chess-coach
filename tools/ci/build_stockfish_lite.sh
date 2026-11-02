@@ -28,6 +28,9 @@ curl -fL --retry 3 --retry-delay 5 -o "$WORK/src.tar.gz" "https://github.com/nmr
 tar -xzf "$WORK/src.tar.gz" -C "$WORK"
 SRC="$WORK/stockfish.js-$COMMIT/src"
 
+# В этом коммите обычная (не WASM) сборка не компилируется из-за опечатки.
+sed -i 's/uci.loop();/uci->loop();/' "$SRC/main.cpp"
+
 # Проверка на этой же машине: сеть должна грузиться, а движок считать. Телефонный
 # бинарник на раннере не запустить.
 echo "==> Проверочная сборка для раннера"
