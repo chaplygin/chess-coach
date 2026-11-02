@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import org.chesscoach.app.update.AppUpdater
 import org.chesscoach.app.update.UpdateState
+import java.util.Locale
 
 private const val BYTES_IN_MB = 1024 * 1024
 
@@ -47,7 +48,15 @@ fun UpdateDialog(updater: AppUpdater) {
             title = { Text("Загрузка обновления") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("${current.percent}%")
+                    Text(
+                        String.format(
+                            Locale.ROOT,
+                            "Скачано %.1f МБ (из %.1f МБ), %d%%",
+                            current.downloadedBytes.toDouble() / BYTES_IN_MB,
+                            current.update.sizeBytes.toDouble() / BYTES_IN_MB,
+                            current.percent,
+                        ),
+                    )
                     LinearProgressIndicator(
                         progress = { current.percent / 100f },
                         modifier = Modifier.fillMaxWidth().padding(top = 4.dp),

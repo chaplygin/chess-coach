@@ -48,7 +48,7 @@ sealed interface UpdateState {
     object Checking : UpdateState
     object UpToDate : UpdateState
     data class Available(val update: AvailableUpdate) : UpdateState
-    data class Downloading(val update: AvailableUpdate, val percent: Int) : UpdateState
+    data class Downloading(val update: AvailableUpdate, val percent: Int, val downloadedBytes: Long = 0) : UpdateState
 
     /** Файл скачан, но система ещё не разрешила этому приложению ставить APK. */
     data class NeedsInstallPermission(val file: File) : UpdateState
@@ -156,7 +156,7 @@ class AppUpdater(private val context: Context) {
             val body =connection.inputStream.bufferedReader().use { it.readText() }
             val release = json.decodeFromString<ReleaseDto>(body)
 
-            // Скачанные файлы весят больше 100 МБ: устаревшие убираем сразу.
+            // Устаревшие скачанные файлы только занимают место: убираем сразу.
             updatesDir.listFiles()?.forEach { file ->
                 if (!file.name.startsWith(release.tagName + ".")) file.delete()
             }
@@ -194,7 +194,7 @@ class AppUpdater(private val context: Context) {
                         val percent = (copied * 100 / update.sizeBytes).toInt().coerceAtMost(100)
                         if (percent != shownPercent) {
                             shownPercent = percent
-                            _state.value = UpdateState.Downloading(update, percent)
+                            _state.value = UpdateState.Downloading(update, percent, copied)
                         }
                     }
                 }
