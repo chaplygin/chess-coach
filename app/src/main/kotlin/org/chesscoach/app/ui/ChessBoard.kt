@@ -3,6 +3,8 @@ package org.chesscoach.app.ui
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -38,6 +40,8 @@ import kotlin.math.sin
 private val LIGHT_SQUARE = Color(0xFFF0D9B5)
 private val DARK_SQUARE = Color(0xFFB58863)
 private val LAST_MOVE_TINT = Color(0x699BC700)
+private val SELECTED_TINT = Color(0x8014551E)
+private val TARGET_DOT = Color(0x4D14551E)
 
 // Подпись координаты берёт цвет противоположной клетки, как на Lichess.
 private val COORDINATE_LABEL_ON_LIGHT = DARK_SQUARE
@@ -78,6 +82,10 @@ fun ChessBoard(
     lastMoveFrom: String? = null,
     lastMoveTo: String? = null,
     arrows: List<BoardArrow> = emptyList(),
+    /** Выбранная фигура и поля, куда она может пойти: так ход делается двумя нажатиями. */
+    selectedSquare: String? = null,
+    targetSquares: Set<String> = emptySet(),
+    onSquareTap: ((String) -> Unit)? = null,
 ) {
     val squares = remember(fen) { BoardLayout.parsePlacement(fen) }
     val highlight = remember(lastMoveFrom, lastMoveTo) {
@@ -97,6 +105,7 @@ fun ChessBoard(
                         val index = boardIndex(row, column, flipped)
                         val isLight = (row + column) % 2 == 0
                         val coordinateColor = if (isLight) COORDINATE_LABEL_ON_LIGHT else COORDINATE_LABEL_ON_DARK
+                        val name = squareName(index)
 
                         Box(
                             modifier = Modifier
@@ -104,8 +113,14 @@ fun ChessBoard(
                                 .fillMaxSize()
                                 .background(if (isLight) LIGHT_SQUARE else DARK_SQUARE)
                                 .then(
-                                    if (index in highlight) Modifier.background(LAST_MOVE_TINT)
-                                    else Modifier
+                                    when {
+                                        name == selectedSquare -> Modifier.background(SELECTED_TINT)
+                                        index in highlight -> Modifier.background(LAST_MOVE_TINT)
+                                        else -> Modifier
+                                    }
+                                )
+                                .then(
+                                    if (onSquareTap != null) Modifier.clickable { onSquareTap(name) } else Modifier
                                 ),
                             contentAlignment = Alignment.Center,
                         ) {
@@ -144,6 +159,17 @@ fun ChessBoard(
                                     )
                                 }
                             }
+                            // Точка на пустом поле, кольцо на поле со взятием — как на Lichess.
+                            if (name in targetSquares) {
+                                val occupied = squares[index] != null
+                                Canvas(Modifier.fillMaxSize()) {
+                                    if (occupied) {
+                                        drawCircle(TARGET_DOT, size.minDimension * 0.46f, style = Stroke(size.minDimension * 0.08f))
+                                    } else {
+                                        drawCircle(TARGET_DOT, size.minDimension * 0.16f)
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -169,6 +195,9 @@ fun ChessBoard(
         }
     }
 }
+
+/** Имя поля по индексу раскладки: 0 — a8, 63 — h1. */
+private fun squareName(index: Int): String = "" + ('a' + index % 8) + (8 - index / 8)
 
 private fun boardIndex(row: Int, column: Int, flipped: Boolean): Int =
     if (flipped) (7 - row) * 8 + (7 - column) else row * 8 + column

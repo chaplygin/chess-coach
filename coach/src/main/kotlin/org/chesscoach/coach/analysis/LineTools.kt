@@ -37,6 +37,13 @@ internal object LineMaterial {
         return if (side == Side.WHITE) end - start else start - end
     }
 
+    /** Материал на доске от лица белых. Null — позицию не прочитать. */
+    fun balance(fen: String): Int? {
+        val board = Board()
+        if (!runCatching { board.loadFromFen(fen) }.isSuccess) return null
+        return material(board)
+    }
+
     private fun squareOf(name: String): Square = Square.valueOf(name.uppercase())
 
     private fun material(board: Board): Int {
@@ -50,6 +57,32 @@ internal object LineMaterial {
             total += if (piece.pieceSide == Side.WHITE) value else -value
         }
         return total
+    }
+}
+
+/**
+ * Мат в один ход по доске. Тут движок не нужен: мат проверяется правилами, а
+ * не оценкой, и пропустить его из-за короткого поиска было бы обидно.
+ */
+internal object MatingMoves {
+    fun of(fen: String, side: Side): List<String> {
+        val board = Board()
+        if (!runCatching { board.loadFromFen(fen) }.isSuccess) return emptyList()
+        val mates = legalMovesFor(board, side).filter { boardAfter(board, side, it).isMated }
+        if (mates.isEmpty()) return emptyList()
+
+        val turned = board.clone()
+        turned.sideToMove = side
+        turned.enPassant = Square.NONE
+        turned.enPassantTarget = Square.NONE
+        return mates.map { MoveNotation.uciToSanOrRaw(turned.fen, listOf(it.toString())).first() }
+    }
+
+    /** Ставит ли ход [uci] мат. */
+    fun gives(fen: String, uci: String): Boolean {
+        val after = applyUciMove(fen, uci) ?: return false
+        val board = Board()
+        return runCatching { board.loadFromFen(after) }.isSuccess && board.isMated
     }
 }
 

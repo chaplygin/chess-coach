@@ -80,9 +80,9 @@ class GameAnalysisService : Service() {
 
         val runner = GameAnalysisRunner(AppContainer.get(applicationContext).engine)
 
-        runner.analyze(positions) { done, total ->
+        runner.analyze(positions) { done, total, partial ->
             notificationManager.notify(NOTIFICATION_ID, buildNotification(done, total))
-            GameAnalysisProgress.update(gameId, ScanState.Running(done, total))
+            GameAnalysisProgress.update(gameId, ScanState.Running(done, total, partial))
         }.onSuccess { evaluations ->
             GameAnalysisStore.write(applicationContext, gameId, evaluations)
             GameAnalysisProgress.update(gameId, ScanState.Done(evaluations))

@@ -17,6 +17,8 @@ sed -i "s/__APP_VERSION__/0.2.${GITHUB_RUN_NUMBER:-dev}/" "$OUT/index.html"
 
 # Движок берётся из npm, а не из репозитория: это чужой бинарник, как и в APK.
 TMP="$(mktemp -d)"
+# Распакованный пакет весит 150-350 МБ: на локальной машине он копился с каждой сборкой.
+trap 'rm -rf "$TMP"' EXIT
 curl -fsSL -o "$TMP/stockfish.tgz" "https://registry.npmjs.org/stockfish/-/stockfish-$STOCKFISH_NPM_VERSION.tgz"
 tar xzf "$TMP/stockfish.tgz" -C "$TMP"
 cp "$TMP/package/bin/stockfish-19-lite-single.js" "$OUT/engine/"

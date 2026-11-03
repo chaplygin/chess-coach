@@ -24,6 +24,9 @@ class CoachReadingTest {
         val USER_POSITIONS = listOf(
             Triple("r1b1k1nr/pppq2pp/2nb4/3pp1B1/8/2NBP3/PPPN1PPP/R2QK2R b KQkq - 0 9", "g8f6", "d4"),
             Triple("r3kb1r/ppp3pp/5p2/3Ppb2/2PNq3/8/PP2BPPP/R1BQ1RK1 b kq - 0 10", "e5d4", "Qxd4"),
+            Triple("rn1qkb1r/pp2p1pp/2p2p2/3nNb2/2BPp3/2N1B3/PPP2PPP/R2QK2R w KQkq - 0 8", "d1h5", "Nxd5"),
+            // Мат конём в один ход: должен стоять в "Шахи и маты", а не вилкой на пешку.
+            Triple("r2qkb2/pp2p1r1/1np3b1/8/2BPN1p1/8/PPP1RPPP/6K1 w - - 0 21", "c4f7", "Nf6"),
         )
     }
 

@@ -3,17 +3,23 @@ package org.chesscoach.web
 import com.github.bhlangonijr.chesslib.Board
 import org.chesscoach.coach.CandidateResult
 import org.chesscoach.coach.CoachEngine
+import com.github.bhlangonijr.chesslib.Side
 import org.chesscoach.coach.analysis.AnalyzedGame
+import org.chesscoach.coach.analysis.RecapInput
 import org.chesscoach.coach.engine.CoachSearchLimits
 import org.chesscoach.coach.engine.EngineClient
 import org.chesscoach.coach.model.BoardMarks
 import org.chesscoach.coach.model.Variation
 import org.chesscoach.coach.model.Variations
 import org.chesscoach.coach.text.TextRenderer
+import org.chesscoach.core.BoardMoves
 import org.chesscoach.core.EngineLine
+import org.chesscoach.core.GameEnd
 import org.chesscoach.core.GameAnalyzer
 import org.chesscoach.core.GameReplay
 import org.chesscoach.core.MoveClassification
+import org.chesscoach.core.MoveNotation
+import org.chesscoach.core.PlyEvaluation
 import org.chesscoach.core.PlyPosition
 import org.chesscoach.core.Score
 import org.chesscoach.core.UciParser
@@ -76,7 +82,7 @@ object WebCoach {
                     .joinToString(FIELD)
             }
 
-    /** [scores] вида "cp:15;mate:-3", на одну больше, чем полуходов. Ответ: class|loss|whiteCp|whiteMate. */
+    /** [scores] вида "cp:15;mate:-3", на одну больше, чем полуходов. Ответ: class|loss|whiteCp|whiteMate|missedMate. */
     @JvmStatic
     @JSExport
     fun classify(positions: String, scores: String): String {
@@ -92,7 +98,7 @@ object WebCoach {
             val score = ply.scoreAfterWhite
             val cp = (score as? Score.Cp)?.centipawns?.toString().orEmpty()
             val mate = (score as? Score.Mate)?.movesToMate?.toString().orEmpty()
-            listOf(ply.classification.name, ply.centipawnLoss, cp, mate).joinToString(FIELD)
+            listOf(ply.classification.name, ply.centipawnLoss, cp, mate, ply.missedForcedMate).joinToString(FIELD)
         }
     }
 
@@ -111,17 +117,90 @@ object WebCoach {
         }
     }
 
-    /** Разбор тренера и стрелки вида "e2e4:BEST_MOVE;...". Пустой [playedUci]: хода из позиции не было. */
+    /**
+     * Разбор тренера и стрелки вида "e2e4:BEST_MOVE;...". Пустой [playedUci]: хода из позиции не было.
+     * [viewer] — "white" или "black", цвет читателя: от него зависят заголовки планов. Пусто — планы по цвету.
+     * [scoreLines] — "false", когда оценки до и после хода страница показывает сама в заголовке хода.
+     */
     @JvmStatic
     @JSExport
-    fun explain(fen: String, playedUci: String?, opening: String?, bridge: EngineBridge, done: DoneCallback) {
+    fun explain(
+        fen: String,
+        playedUci: String?,
+        opening: String?,
+        viewer: String?,
+        scoreLines: String?,
+        bridge: EngineBridge,
+        done: DoneCallback,
+    ) {
         launch(done) {
             val explanation = CoachEngine(BridgeClient(bridge))
                 .explain(fen, playedUci?.takeIf { it.isNotEmpty() }, opening?.takeIf { it.isNotEmpty() })
             val arrows = BoardMarks.of(explanation)
                 .joinToString(ROW) { it.from + it.to + ":" + it.style.name }
-            TextRenderer.render(explanation) to (arrows + PART + encodeVariations(Variations.of(explanation)))
+            val side = when (viewer) {
+                "white" -> Side.WHITE
+                "black" -> Side.BLACK
+                else -> null
+            }
+            TextRenderer.render(explanation, side, scoreLines != "false") to
+                (arrows + PART + encodeVariations(Variations.of(explanation)))
         }
+    }
+
+    /** Законные ходы для доски с нажатиями: uci|san|fenAfter через ";". */
+    @JvmStatic
+    @JSExport
+    fun legalMoves(fen: String): String =
+        BoardMoves.legal(fen).joinToString(ROW) { it.uci + FIELD + it.san + FIELD + it.fenAfter }
+
+    /** Вариант движка записью SAN через пробел. */
+    @JvmStatic
+    @JSExport
+    fun sanLine(fen: String, ucis: String): String =
+        MoveNotation.uciToSanOrRaw(fen, ucis.split(" ").filter { it.isNotEmpty() }).joinToString(" ")
+
+    /** "Мат. Победили белые." или "Пат. Ничья." Пусто — партия на доске не кончилась. */
+    @JvmStatic
+    @JSExport
+    fun gameEnd(fen: String): String = GameEnd.of(fen).orEmpty()
+
+    /**
+     * Итоги партии. Поля через [PART]: цвет, ходы, начальная позиция, оценки в
+     * формате [classify], итог (WIN, LOSS, DRAW), как кончилась партия, часы через
+     * запятую, начальное время. Ответ через [PART]: вердикт, свои числа, числа
+     * соперника (точность,зевки,ошибки,неточности) и моменты ply|kind|title|detail|swing через [ROW].
+     */
+    @JvmStatic
+    @JSExport
+    fun recap(payload: String): String {
+        val f = payload.split(PART)
+        val positions = GameReplay.replay(f[1].split(" ").filter { it.isNotEmpty() }, f[2].takeIf { it.isNotEmpty() })
+        val evaluations = f[3].split(ROW).filter { it.isNotEmpty() }.mapIndexed { index, row ->
+            val e = row.split(FIELD)
+            val score = if (e[3].isNotEmpty()) Score.Mate(e[3].toInt()) else Score.Cp(e[2].toIntOrNull() ?: 0)
+            PlyEvaluation(index, MoveClassification.valueOf(e[0]), e[1].toIntOrNull() ?: 0, e.getOrNull(4) == "true", score)
+        }
+        val recap = CoachEngine(NoEngine).recap(
+            RecapInput(
+                iAmWhite = f[0] == "white",
+                positions = positions.take(evaluations.size),
+                evaluations = evaluations.take(positions.size),
+                outcome = f[4],
+                status = f[5],
+                clocksCs = f[6].split(",").mapNotNull { it.toIntOrNull() },
+                initialSeconds = f[7].toIntOrNull(),
+            ),
+        )
+        val stats = { s: org.chesscoach.coach.analysis.SideStats ->
+            listOf(s.accuracy, s.blunders, s.mistakes, s.inaccuracies).joinToString(",")
+        }
+        return listOf(
+            recap.verdict,
+            stats(recap.me),
+            stats(recap.opponent),
+            recap.moments.joinToString(ROW) { listOf(it.ply, it.kind.name, it.title, it.detail, it.swing.toInt()).joinToString(FIELD) },
+        ).joinToString(PART)
     }
 
     /** Разбор хода, который человек предложил сам. Вторая строка ответа: его вариант. */

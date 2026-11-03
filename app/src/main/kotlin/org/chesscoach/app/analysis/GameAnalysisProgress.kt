@@ -9,7 +9,8 @@ import org.chesscoach.core.PlyEvaluation
 
 /** Состояние скана партии движком, как его видит экран. */
 sealed interface ScanState {
-    data class Running(val done: Int, val total: Int) : ScanState
+    /** [partial] — оценки уже посчитанных ходов: по ним рисуется предварительный график. */
+    data class Running(val done: Int, val total: Int, val partial: List<PlyEvaluation> = emptyList()) : ScanState
     data class Done(val evaluations: List<PlyEvaluation>) : ScanState
     data class Failed(val message: String) : ScanState
 }

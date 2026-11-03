@@ -148,6 +148,8 @@ sealed interface Section {
         val pieceDifference: Map<com.github.bhlangonijr.chesslib.PieceType, Int> = emptyMap(),
         /** Что осталось сделать в дебюте: называет фигуры, а не общие правила. */
         val developmentPlan: DevelopmentPlan? = null,
+        /** То же для соперника: неразвитые фигуры и король в центре — это его слабости. */
+        val opponentDevelopmentPlan: DevelopmentPlan? = null,
     ) : Section
 
     /**
@@ -170,6 +172,8 @@ sealed interface Section {
         val checks: List<String> = emptyList(),
         /** Удары следующим ходом, проверенные движком. */
         val advice: List<CheckedAdvice> = emptyList(),
+        /** Маты соперника в один ход, будь ход его, записью SAN. */
+        val mates: List<String> = emptyList(),
     ) : Section
 
     /** Моя атака: чем я могу наказать соперника, и к чему веду дело. */
@@ -183,6 +187,8 @@ sealed interface Section {
         val checks: List<String> = emptyList(),
         /** Удары следующим ходом, проверенные движком. */
         val advice: List<CheckedAdvice> = emptyList(),
+        /** Свои маты в один ход записью SAN. */
+        val mates: List<String> = emptyList(),
     ) : Section
 
     /**

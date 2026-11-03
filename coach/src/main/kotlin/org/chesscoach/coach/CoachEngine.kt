@@ -3,7 +3,10 @@ package org.chesscoach.coach
 import org.chesscoach.coach.analysis.AnalyzedGame
 import org.chesscoach.coach.analysis.ErrorReport
 import org.chesscoach.coach.analysis.ErrorReportBuilder
+import org.chesscoach.coach.analysis.GameRecap
+import org.chesscoach.coach.analysis.GameRecapBuilder
 import org.chesscoach.coach.analysis.PipelineOrchestrator
+import org.chesscoach.coach.analysis.RecapInput
 import org.chesscoach.coach.detectors.BackRankDetector
 import org.chesscoach.coach.detectors.DevelopmentDetector
 import org.chesscoach.coach.detectors.Detector
@@ -106,6 +109,9 @@ class CoachEngine(engineClient: EngineClient) {
 
     /** Сводка повторяющихся ошибок по уже разобранным партиям: движок здесь не нужен. */
     suspend fun errorReport(games: List<AnalyzedGame>): ErrorReport = ErrorReportBuilder(featureSource).build(games)
+
+    /** Итоги одной партии по уже готовым оценкам: движок здесь тоже не нужен. */
+    fun recap(input: RecapInput): GameRecap = GameRecapBuilder(featureSource).build(input)
 
     companion object {
         const val VERSION: String = "M5"

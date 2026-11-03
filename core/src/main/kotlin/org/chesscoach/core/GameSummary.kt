@@ -31,6 +31,10 @@ data class GameSummary(
     val openingName: String?,
     val movesSan: List<String>,
     val initialFen: String?,
+    /** Остаток на часах после каждого полухода, в сотых секунды. Пусто — партия без часов. */
+    val clocksCs: List<Int> = emptyList(),
+    /** Начальное время на партию, секунды. */
+    val initialClockSeconds: Int? = null,
 ) {
     val movesCount: Int get() = movesSan.size
 

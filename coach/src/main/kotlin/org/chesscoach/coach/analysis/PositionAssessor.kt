@@ -95,6 +95,11 @@ object PositionAssessor {
             opening = opening,
             pieceDifference = if (boardLoaded) pieceDifference(board) else emptyMap(),
             developmentPlan = plan,
+            opponentDevelopmentPlan = if (boardLoaded && features.phase == GamePhase.OPENING) {
+                developmentPlan(board, mover.flip())
+            } else {
+                null
+            },
         )
     }
 
@@ -113,7 +118,14 @@ object PositionAssessor {
             .none { it.file in CENTER_FILES && !it.value().endsWith(pawnHome) }
 
         if (undeveloped.isEmpty() && !castlingPending && !needsCenter) return null
-        return DevelopmentPlan(undeveloped, castlingPending, needsCenter, Evidence.onBoard(board, *undeveloped.toTypedArray()))
+        // Лёгкие фигуры бывают уже развиты: тогда доказательство плана — король, который ждёт
+        // рокировки, или центральные пешки на месте. Без полей факт создать нельзя.
+        val king = board.getKingSquare(mover)
+        val centerPawns = board.getPieceLocation(Piece.make(mover, PieceType.PAWN)).filter { it.file in CENTER_FILES }
+        val squares = undeveloped +
+            listOf(king).filter { castlingPending || needsCenter && centerPawns.isEmpty() } +
+            centerPawns.filter { needsCenter }
+        return DevelopmentPlan(undeveloped, castlingPending, needsCenter, Evidence.onBoard(board, *squares.toTypedArray()))
     }
 
     /**

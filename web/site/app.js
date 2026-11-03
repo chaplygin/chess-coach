@@ -1,6 +1,6 @@
 // Страница разбора партий. Вся логика тренера живёт в coach.js (собран из :core
 // и :coach), здесь только экран, вход в Lichess и общение с движком.
-import { classify, errorReport, explain, replay, terminalScore, tryCandidate } from "./coach.js";
+import { classify, errorReport, explain, gameEnd, legalMoves, recap, replay, sanLine, terminalScore } from "./coach.js";
 import { Engine } from "./engine.js";
 
 const LICHESS = "https://lichess.org";
@@ -137,11 +137,13 @@ function showStart(errorText) {
   }, input, h("button", { type: "submit" }, "Показать партии"));
 
   app.replaceChildren(h("section", { class: "intro" },
-    h("h1", {}, "Тренер объяснит, почему ход был лучше"),
-    h("p", {}, "Разбор завершённых партий Lichess на русском языке. Stockfish и тренер работают прямо в браузере, партии никуда не отправляются."),
+    h("h1", { class: "large-title" }, "Наставник"),
+    h("p", {}, "Тренер объяснит, почему ход был лучше. Разбор завершённых партий Lichess на русском языке: Stockfish и тренер работают прямо в браузере, партии никуда не отправляются."),
     errorText ? h("p", { class: "error" }, errorText) : null,
-    h("div", { class: "row" }, h("button", { class: "primary", onclick: startLogin }, "Войти через Lichess")),
-    form,
+    h("div", { class: "card" },
+      h("div", { class: "row" }, h("button", { class: "primary", onclick: startLogin }, "Войти через Lichess")),
+      form,
+    ),
     h("p", { class: "note" }, "Для просмотра публичных партий вход не нужен. Подсказок в идущих партиях здесь нет и не будет: только разбор завершённых."),
   ));
 }
@@ -157,6 +159,7 @@ function toGame(raw, username) {
     id: raw.id,
     myColor,
     outcome,
+    status: raw.status || "",
     opponent: other.user?.name || (other.aiLevel ? "Компьютер, уровень " + other.aiLevel : "Аноним"),
     rating: other.rating,
     speed: raw.speed,
@@ -164,6 +167,8 @@ function toGame(raw, username) {
     opening: raw.opening?.name || "",
     moves: raw.moves,
     initialFen: raw.initialFen || "",
+    clocks: raw.clocks || [],
+    initialClock: raw.clock?.initial ?? "",
   };
 }
 
@@ -182,13 +187,21 @@ function reportPayload(games) {
 function showReport(games) {
   const box = h("div", { class: "coach" }, "Считаю…");
   app.replaceChildren(
-    h("button", { onclick: showGames }, "← К партиям"),
-    h("h2", { style: "margin-top:12px" }, "Мои ошибки"),
+    h("button", { class: "link", onclick: showGames }, "‹ Партии"),
+    h("h1", { class: "large-title" }, "Мои ошибки"),
     box,
   );
   errorReport(reportPayload(games), (text, _marks, error) => {
     box.textContent = error ? "Не удалось собрать сводку: " + error : text;
   });
+}
+
+function menuRow(icon, tint, title, subtitle, onclick) {
+  return h("button", { class: "menu-row", onclick },
+    h("span", { class: "menu-icon", style: "background:" + tint }, icon),
+    h("span", { class: "menu-text" }, h("span", {}, title), h("span", { class: "sub" }, subtitle)),
+    h("span", { class: "chevron" }, "›"),
+  );
 }
 
 async function showGames() {
@@ -197,7 +210,7 @@ async function showGames() {
   app.replaceChildren(h("p", { class: "note" }, "Загружаю партии " + username + "…"));
   try {
     const body = await lichessGet(
-      "/api/games/user/" + encodeURIComponent(username) + "?max=40&moves=true&opening=true&sort=dateDesc",
+      "/api/games/user/" + encodeURIComponent(username) + "?max=40&moves=true&opening=true&clocks=true&sort=dateDesc",
       "application/x-ndjson",
     );
     const games = body.split(NEWLINE).filter(Boolean).map((line) => {
@@ -208,17 +221,36 @@ async function showGames() {
       app.replaceChildren(h("p", {}, "У игрока " + username + " нет завершённых партий в обычные шахматы."));
       return;
     }
+    const last = games[0];
+    // Главную ошибку последней партии показываем, только если она уже разобрана: ради карточки движок не гоняем.
+    const lastRecap = recapOf(last, parseEvaluations(store.get("analysis:" + last.id) || ""));
+    const lastMoment = lastRecap?.moments.slice().sort((a, b) => b.swing - a.swing)[0];
     app.replaceChildren(
-      h("h2", {}, "Партии " + username),
-      h("div", { class: "row" }, h("button", { onclick: () => showReport(games) }, "Мои ошибки")),
-      h("ul", { class: "games" }, games.map((game) => h("li", {},
-        h("button", { onclick: () => showReview(game) },
+      h("h1", { class: "large-title" }, "Наставник"),
+      h("div", { class: "card profile" },
+        h("span", { class: "avatar" }, username.slice(0, 1).toUpperCase()),
+        h("span", { class: "menu-text" }, h("strong", {}, username), h("span", { class: "sub" }, "Аккаунт Lichess")),
+      ),
+      h("h3", { class: "section" }, "Последняя партия"),
+      h("button", { class: "card last-game", onclick: () => showRecap(last) },
+        h("span", { class: "spread" }, h("strong", {}, "против " + last.opponent), h("span", { class: "result-" + last.outcome }, OUTCOME_TEXT[last.outcome])),
+        h("span", { class: "sub" }, lastRecap
+          ? (lastMoment ? lastMoment.title + " · " + lastMoment.detail : "Крупных ошибок не нашлось")
+          : "Ещё не разобрана: откройте, разбор запустится сам"),
+        h("span", { class: "accent" }, "Открыть итоги"),
+      ),
+      h("h3", { class: "section" }, "Сводка"),
+      h("div", { class: "group" }, menuRow("◎", "#ff3b30", "Мои ошибки", "Что повторяется из партии в партию", () => showReport(games))),
+      h("h3", { class: "section" }, "Партии " + username),
+      h("div", { class: "group" }, games.map((game) => h("button", { class: "menu-row game", onclick: () => showRecap(game) },
+        h("span", { class: "menu-text" },
           h("span", {}, "против " + game.opponent + (game.rating ? " (" + game.rating + ")" : "")),
-          h("span", { class: "result-" + game.outcome }, OUTCOME_TEXT[game.outcome]),
           h("span", { class: "sub" }, [
             new Date(game.createdAt).toLocaleDateString("ru-RU"), game.speed, game.opening,
           ].filter(Boolean).join(" · ")),
         ),
+        h("span", { class: "result-" + game.outcome }, OUTCOME_TEXT[game.outcome]),
+        h("span", { class: "chevron" }, "›"),
       ))),
     );
   } catch (error) {
@@ -226,7 +258,7 @@ async function showGames() {
   }
 }
 
-// ---------- Разбор ----------
+// ---------- Общие куски разбора ----------
 
 // Запись хода значком фигуры, как в списке ходов на Lichess.
 function figurine(san) {
@@ -243,6 +275,21 @@ function shortScore({ cp, mate }) {
   return cp > 0 ? "+" + body : body;
 }
 
+const CLASS_LABEL = { BEST: "лучший ход", GOOD: "хороший ход", INACCURACY: "неточность", MISTAKE: "ошибка", BLUNDER: "зевок" };
+
+function moveLabel(position) {
+  return position.moveNumber + (position.white ? ". " : "... ") + position.san;
+}
+
+// Заголовок хода, как MoveHeadline в приложении: "8. Qh5+ — зевок: +0.5 → -2.9".
+function headline(position, before, after) {
+  let text = moveLabel(position);
+  if (after) text += " — " + CLASS_LABEL[after.cls];
+  if (before && after) text += ": " + shortScore(before) + " → " + shortScore(after);
+  else if (after) text += ": " + shortScore(after);
+  return text;
+}
+
 function parsePositions(text) {
   return text.split(";").filter(Boolean).map((row) => {
     const f = row.split("|");
@@ -253,7 +300,7 @@ function parsePositions(text) {
 function parseEvaluations(text) {
   return text.split(";").filter(Boolean).map((row) => {
     const f = row.split("|");
-    return { cls: f[0], loss: Number(f[1]), cp: f[2] === "" ? null : Number(f[2]), mate: f[3] === "" ? null : Number(f[3]) };
+    return { cls: f[0], loss: Number(f[1]), cp: f[2] === "" ? null : Number(f[2]), mate: f[3] === "" ? null : Number(f[3]), missed: f[4] === "true" };
   });
 }
 
@@ -272,25 +319,136 @@ function parseVariations(text) {
   });
 }
 
-// Текст тренера: справочный блок свёрнут, чтобы не заслонять разбор.
-function coachBlock(text, waiting) {
-  const marker = NEWLINE + REFERENCE_TITLE + NEWLINE;
-  const at = text.indexOf(marker);
-  if (at < 0) return h("div", { class: "coach" + (waiting ? " wait" : "") }, text);
-  return h("div", { class: "coach" + (waiting ? " wait" : "") },
-    text.slice(0, at).trimEnd(),
-    h("details", {}, h("summary", {}, "Термины"), text.slice(at + marker.length)),
+const MOMENT_COLORS = {
+  MY_ERROR: "#ff3b30", TIME_TROUBLE: "#ff3b30", LOST_ADVANTAGE: "#ff3b30",
+  MISSED_CHANCE: "#ff9500", OPPONENT_ERROR: "#34c759", MY_STRIKE: "#34c759", OPPONENT_STRIKE: "#af52de",
+};
+
+// Итоги партии считает тренер; по неполному скану тоже — так первый перелом виден раньше.
+function recapOf(game, evaluations) {
+  if (!evaluations.length) return null;
+  const rows = evaluations.map((e) => [e.cls, e.loss, e.cp ?? "", e.mate ?? "", e.missed ? "true" : "false"].join("|")).join(";");
+  const text = recap([game.myColor, game.moves, game.initialFen, rows, game.outcome, game.status || "", (game.clocks || []).join(","), game.initialClock ?? ""].join("~"));
+  const [verdict, me, opponent, momentRows] = text.split("~");
+  const stats = (s) => { const [accuracy, blunders, mistakes, inaccuracies] = s.split(",").map(Number); return { accuracy, blunders, mistakes, inaccuracies }; };
+  const moments = (momentRows || "").split(";").filter(Boolean).map((row) => {
+    const [ply, kind, title, detail, swing] = row.split("|");
+    return { ply: Number(ply), kind, title, detail, swing: Number(swing) };
+  });
+  return { verdict, me: stats(me), opponent: stats(opponent), moments };
+}
+
+// ---------- Скан партии движком ----------
+
+// Один скан на партию, на него подписываются и итоги, и разбор по ходам.
+const scans = new Map();
+
+function scanFor(game) {
+  const cached = parseEvaluations(store.get("analysis:" + game.id) || "");
+  const positionsText = replay(game.moves, game.initialFen);
+  const total = parsePositions(positionsText).length;
+  if (cached.length === total) return { done: total, total, evaluations: cached, final: true, error: null, listeners: new Set() };
+  let scan = scans.get(game.id);
+  if (scan && !scan.error) return scan;
+  scan = { done: 0, total, evaluations: [], final: false, error: null, listeners: new Set() };
+  scans.set(game.id, scan);
+  runScan(game, scan, positionsText);
+  return scan;
+}
+
+function notify(scan) {
+  scan.listeners.forEach((listener) => listener());
+}
+
+async function runScan(game, scan, positionsText) {
+  const positions = parsePositions(positionsText);
+  const rows = positionsText.split(";").filter(Boolean);
+  const fens = [positions.length ? positions[0].fenBefore : game.initialFen, ...positions.map((p) => p.fenAfter)];
+  const scores = [];
+  try {
+    for (const fen of fens) {
+      const info = await engine.analyse(fen, SCAN_MOVETIME_MS, 0, 1);
+      const score = scoreToken(info) || terminalScore(fen);
+      if (!score) throw new Error("движок не вернул оценку");
+      scores.push(score);
+      scan.done = Math.min(scores.length, positions.length);
+      // Ход оценён, как только посчитана позиция после него: график растёт по ходу скана.
+      if (scores.length >= 2) scan.evaluations = parseEvaluations(classify(rows.slice(0, scores.length - 1).join(";"), scores.join(";")));
+      notify(scan);
+    }
+    const result = classify(positionsText, scores.join(";"));
+    scan.evaluations = parseEvaluations(result);
+    scan.final = true;
+    store.set("analysis:" + game.id, result);
+  } catch (error) {
+    scan.error = error.message;
+  }
+  notify(scan);
+}
+
+// Полоска прогресса или ошибка скана.
+function scanBlock(scan, onRetry) {
+  if (scan.final) return null;
+  if (scan.error) {
+    return h("div", { class: "card" }, h("p", { class: "error" }, "Разбор не удался: " + scan.error),
+      h("button", { class: "primary", onclick: onRetry }, "Разобрать ещё раз"));
+  }
+  return h("div", {},
+    h("div", { class: "progress" }, h("div", { class: "scan-bar", style: "width:" + Math.round((scan.done / Math.max(1, scan.total)) * 100) + "%" })),
+    h("p", { class: "note scan-label" }, "Движок разбирает партию: " + scan.done + " из " + scan.total),
   );
 }
 
-function bridge(guard) {
-  return (fen, movetimeMs, depth, multiPv, done) => {
-    if (!guard()) { done(""); return; }
-    engine.analyse(fen, movetimeMs, depth, multiPv).then(done, () => done(""));
-  };
+// ---------- Итоги партии ----------
+
+function showRecap(game) {
+  let closed = false;
+  const scan = scanFor(game);
+  const listener = () => { if (!closed) render(); };
+  scan.listeners.add(listener);
+  const leave = (next) => { closed = true; scan.listeners.delete(listener); next(); };
+
+  function render() {
+    const result = recapOf(game, scan.evaluations);
+    const total = parsePositions(replay(game.moves, game.initialFen)).length;
+    const first = result?.moments[0];
+    app.replaceChildren(h("section", { class: "recap" },
+      h("div", { class: "spread" },
+        h("button", { class: "link", onclick: () => leave(showGames) }, "‹ Партии"),
+        h("button", { class: "link", onclick: () => leave(() => showReview(game, 0)) }, "Ходы"),
+      ),
+      h("h1", { class: "large-title" }, "Итоги партии"),
+      h("p", { class: "note" }, (game.myColor === "white" ? "Вы белыми" : "Вы чёрными") + " против " + game.opponent + " · " + OUTCOME_TEXT[game.outcome].toLowerCase()),
+      scanBlock(scan, () => { scans.delete(game.id); leave(() => showRecap(game)); }),
+      !scan.final && first ? h("button", { class: "link", onclick: () => leave(() => showReview(game, first.ply + 1)) }, "Первый перелом: " + first.title.split(" — ")[0] + " ›") : null,
+      result ? h("div", { class: "card verdict" }, result.verdict) : null,
+      result ? h("div", { class: "stats" }, statCard("Вы", result.me), statCard("Соперник", result.opponent)) : null,
+      scan.evaluations.length ? h("div", { class: "card" }, drawGraph(scan.evaluations, total, 0, result?.moments || [], (p) => leave(() => showReview(game, p)))) : null,
+      result && result.moments.length ? h("h3", { class: "section" }, "Ключевые моменты") : null,
+      result && result.moments.length ? h("div", { class: "group" }, result.moments.map((m) => h("button", { class: "menu-row", onclick: () => leave(() => showReview(game, m.ply + 1)) },
+        h("span", { class: "dot", style: "background:" + MOMENT_COLORS[m.kind] }),
+        h("span", { class: "menu-text" }, h("span", {}, m.title), h("span", { class: "sub" }, m.detail)),
+        h("span", { class: "chevron" }, "›"),
+      ))) : null,
+      h("button", { class: "primary wide", onclick: () => leave(() => showReview(game, (first ? first.ply : 0) + 1)) }, "Разобрать по ходам"),
+    ));
+  }
+
+  render();
+  window.scrollTo(0, 0);
 }
 
-function drawBoard(fen, flipped, lastUci, arrows) {
+function statCard(title, stats) {
+  return h("div", { class: "card stat" },
+    h("span", { class: "sub" }, title),
+    h("strong", {}, stats.accuracy + "%"),
+    h("span", { class: "sub" }, "зевки " + stats.blunders + " · ошибки " + stats.mistakes + " · неточн. " + stats.inaccuracies),
+  );
+}
+
+// ---------- Доска ----------
+
+function drawBoard(fen, flipped, lastUci, arrows, interaction) {
   const placement = fen.split(" ")[0].split("/");
   const squares = [];
   for (let rank = 0; rank < 8; rank++) {
@@ -308,14 +466,18 @@ function drawBoard(fen, flipped, lastUci, arrows) {
 
   const name = (s) => "abcdefgh"[s.file] + (8 - s.rank);
   const lit = lastUci ? [lastUci.slice(0, 2), lastUci.slice(2, 4)] : [];
+  const selected = interaction?.selected;
+  const targets = interaction?.targets || [];
   const pieceFile = (piece) => "pieces/" + (piece === piece.toUpperCase() ? "w" : "b") + piece.toUpperCase() + ".svg";
   // Как на Lichess: буквы файлов внизу слева, номера горизонталей справа сверху.
-  const board = h("div", { class: "board", role: "img", "aria-label": "Позиция на доске" }, squares.map((s, index) => h("div", {
-    class: "sq " + ((s.rank + s.file) % 2 ? "d" : "l") + (lit.includes(name(s)) ? " hl" : ""),
+  const board = h("div", { class: "board" + (interaction ? " live" : ""), role: "img", "aria-label": "Позиция на доске" }, squares.map((s, index) => h("div", {
+    class: "sq " + ((s.rank + s.file) % 2 ? "d" : "l") + (name(s) === selected ? " sel" : lit.includes(name(s)) ? " hl" : ""),
+    onclick: interaction ? () => interaction.onSquare(name(s)) : undefined,
   },
     index >= 56 ? h("span", { class: "coord file" }, name(s)[0]) : null,
     index % 8 === 7 ? h("span", { class: "coord rank" }, name(s)[1]) : null,
     s.piece ? h("img", { class: "pc", src: pieceFile(s.piece), alt: "", draggable: "false" }) : null,
+    targets.includes(name(s)) ? h("span", { class: s.piece ? "ring" : "dot-target" }) : null,
   )));
 
   const wrap = h("div", { class: "board-wrap" }, board);
@@ -378,7 +540,9 @@ function drawArrows(arrows, flipped) {
   return svg;
 }
 
-function drawGraph(evaluations, ply, onPick) {
+// График оценки: ширина — вся партия, поэтому во время скана он растёт слева направо.
+// Вертикальная линия — выбранный ход, цветные точки — ключевые моменты. [ply] — число сделанных ходов.
+function drawGraph(evaluations, total, ply, moments, onPick) {
   const NS = "http://www.w3.org/2000/svg";
   const svg = document.createElementNS(NS, "svg");
   svg.setAttribute("class", "graph");
@@ -390,7 +554,7 @@ function drawGraph(evaluations, ply, onPick) {
     const cp = e.mate !== null ? (e.mate > 0 ? 500 : -500) : Math.max(-500, Math.min(500, e.cp));
     return 20 - cp / 25;
   };
-  const stepX = 100 / Math.max(1, evaluations.length - 1);
+  const stepX = 100 / Math.max(1, total - 1);
   const axis = document.createElementNS(NS, "line");
   Object.entries({ x1: 0, y1: 20, x2: 100, y2: 20, stroke: "currentColor", opacity: 0.25, "stroke-width": 0.4, "vector-effect": "non-scaling-stroke" })
     .forEach(([key, value]) => axis.setAttribute(key, value));
@@ -402,60 +566,148 @@ function drawGraph(evaluations, ply, onPick) {
   if (ply > 0) {
     const mark = document.createElementNS(NS, "line");
     const x = (ply - 1) * stepX;
-    Object.entries({ x1: x, y1: 0, x2: x, y2: 40, stroke: "var(--mistake)", "stroke-width": 1, "vector-effect": "non-scaling-stroke" })
+    Object.entries({ x1: x, y1: 0, x2: x, y2: 40, stroke: "var(--accent)", "stroke-width": 2, "vector-effect": "non-scaling-stroke" })
       .forEach(([key, value]) => mark.setAttribute(key, value));
     svg.append(mark);
   }
+  for (const moment of moments) {
+    const e = evaluations[moment.ply];
+    if (!e) continue;
+    const dot = document.createElementNS(NS, "ellipse");
+    Object.entries({ cx: moment.ply * stepX, cy: Math.max(2, Math.min(38, y(e))), rx: 1.1, ry: 2.6, fill: MOMENT_COLORS[moment.kind] || "#888" })
+      .forEach(([key, value]) => dot.setAttribute(key, value));
+    svg.append(dot);
+  }
   svg.addEventListener("click", (event) => {
     const rect = svg.getBoundingClientRect();
-    onPick(Math.round(((event.clientX - rect.left) / rect.width) * (evaluations.length - 1)) + 1);
+    onPick(Math.round(((event.clientX - rect.left) / rect.width) * (total - 1)) + 1);
   });
   return svg;
 }
 
-function showReview(game) {
-  const positions = parsePositions(replay(game.moves, game.initialFen));
+// Текст тренера: справочный блок свёрнут, чтобы не заслонять разбор.
+function coachBlock(text, waiting) {
+  const marker = NEWLINE + REFERENCE_TITLE + NEWLINE;
+  const at = text.indexOf(marker);
+  if (at < 0) return h("div", { class: "coach" + (waiting ? " wait" : "") }, text);
+  return h("div", { class: "coach" + (waiting ? " wait" : "") },
+    text.slice(0, at).trimEnd(),
+    h("details", {}, h("summary", {}, "Термины"), text.slice(at + marker.length)),
+  );
+}
+
+function bridge(guard) {
+  return (fen, movetimeMs, depth, multiPv, done) => {
+    if (!guard()) { done(""); return; }
+    engine.analyse(fen, movetimeMs, depth, multiPv).then(done, () => done(""));
+  };
+}
+
+function parseLegal(fen) {
+  return legalMoves(fen).split(";").filter(Boolean).map((row) => {
+    const [uci, san, fenAfter] = row.split("|");
+    return { uci, san, fenAfter, from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] || "" };
+  });
+}
+
+// Строки info движка в оценку от лица белых и вариант SAN.
+function parseEngineLines(fen, infoLines) {
+  const blackToMove = fen.split(" ")[1] === "b";
+  return infoLines.split("|").filter(Boolean).map((line) => {
+    const tokens = line.split(" ");
+    const at = tokens.indexOf("score");
+    const pvAt = tokens.indexOf("pv");
+    if (at < 0 || pvAt < 0) return null;
+    const value = Number(tokens[at + 2]) * (blackToMove ? -1 : 1);
+    const pv = tokens.slice(pvAt + 1, pvAt + 7);
+    return {
+      score: tokens[at + 1] === "mate" ? { cp: null, mate: value } : { cp: value, mate: null },
+      san: sanLine(fen, pv.join(" ")).split(" "),
+      first: pv[0],
+    };
+  }).filter(Boolean).slice(0, 2);
+}
+
+const PROMOTION_NAMES = { q: "Ферзь", r: "Ладья", b: "Слон", n: "Конь" };
+
+// ---------- Разбор по ходам ----------
+
+// [startPly] — сколько ходов сделано: 0 — начальная позиция, 1 — после первого хода.
+function showReview(game, startPly = 0) {
+  const positionsText = replay(game.moves, game.initialFen);
+  const positions = parsePositions(positionsText);
   const flipped = game.myColor === "black";
-  const cacheKey = "analysis:" + game.id;
   const startFen = positions.length ? positions[0].fenBefore : game.initialFen;
+  const scan = scanFor(game);
 
   let ply = 0;
-  let evaluations = parseEvaluations(store.get(cacheKey) || "");
-  if (evaluations.length !== positions.length) evaluations = [];
-  let scan = null;
+  let recapResult = recapOf(game, scan.evaluations);
   let coachText = "";
-  let candidateText = "";
   let coachWaiting = false;
   let arrows = [];
   let variations = [];
-  // Показанный ход варианта: { line, step }. Пока он задан, доска показывает вариант, а не партию.
+  // Показанный ход варианта тренера: { line, step }. Пока он задан, доска показывает вариант, а не партию.
   let shown = null;
+  // Свой вариант: ходы, сыгранные на доске. Курсор — показанный ход, -1 — исходная позиция партии.
+  let line = [];
+  let lineCursor = -1;
+  let lineText = "";
+  let selected = null;
+  let promotion = [];
+  let engineLines = [];
   let request = 0;
+  let engineRequest = 0;
   let closed = false;
   let timer = null;
 
   const fenAt = (index) => (index === 0 ? startFen : positions[index - 1].fenAfter);
+  const lineActive = () => line.length > 0;
+  const displayedFen = () => shown ? variations[shown.line].fens[shown.step]
+    : lineActive() && lineCursor >= 0 ? line[lineCursor].fenAfter : fenAt(ply);
+
+  const listener = () => {
+    if (closed) return;
+    recapResult = recapOf(game, scan.evaluations);
+    render();
+  };
+  scan.listeners.add(listener);
+
+  function leave(next) {
+    closed = true;
+    clearTimeout(timer);
+    scan.listeners.delete(listener);
+    document.removeEventListener("keydown", onKey);
+    next();
+  }
 
   function goTo(next) {
     ply = Math.max(0, Math.min(positions.length, next));
     arrows = [];
     variations = [];
     shown = null;
+    line = [];
+    lineCursor = -1;
+    lineText = "";
+    selected = null;
+    promotion = [];
+    coachText = ply === 0 ? "" : "Тренер думает…";
     render();
     clearTimeout(timer);
     // Пауза, чтобы быстрое перелистывание не ставило движку очередь из позиций.
-    timer = setTimeout(askCoach, 250);
+    timer = setTimeout(() => { askCoach(); askEngine(); }, 250);
   }
 
+  // Карточка разбирает сам выбранный ход: из позиции до него, со сравнением с лучшим.
   function askCoach() {
     const token = ++request;
+    if (ply === 0) { coachWaiting = false; return; }
+    const move = positions[ply - 1];
     coachWaiting = true;
-    coachText = "Тренер думает…";
     render();
-    explain(fenAt(ply), positions[ply]?.uci || "", game.opening, bridge(() => token === request && !closed), (text, marks, error) => {
+    explain(move.fenBefore, move.uci, game.opening, game.myColor, "false", bridge(() => token === request && !closed), (text, marks, error) => {
       if (token !== request || closed) return;
       coachWaiting = false;
-      coachText = error ? "Не удалось разобрать позицию: " + error : text;
+      coachText = error ? "Тренер не смог разобрать ход: " + error : text;
       const [arrowText, variationText] = (marks || "").split("~");
       variations = parseVariations(variationText);
       arrows = (arrowText || "").split(";").filter(Boolean).map((item) => {
@@ -466,59 +718,64 @@ function showReview(game) {
     });
   }
 
-  function submitCandidate(input) {
-    const typed = input.trim();
-    if (!typed) return;
-    const token = ++request;
-    coachWaiting = true;
-    coachText = "Считаю ход " + typed + "…";
+  // Две строки движка над доской — для той позиции, что сейчас на доске.
+  function askEngine() {
+    const token = ++engineRequest;
+    const fen = displayedFen();
+    engineLines = [];
+    if (gameEnd(fen)) { render(); return; }
+    engine.analyse(fen, 600, 0, 2).then((info) => {
+      if (token !== engineRequest || closed) return;
+      engineLines = parseEngineLines(fen, info);
+      // Оценка хода варианта — это оценка позиции после него.
+      if (lineActive() && lineCursor >= 0 && line[lineCursor].fenAfter === fen && engineLines[0]) line[lineCursor].score = engineLines[0].score;
+      render();
+    }, () => {});
+  }
+
+  function playMove(move) {
+    selected = null;
+    promotion = [];
+    if (!lineActive() && !shown && positions[ply] && positions[ply].uci === move.uci) {
+      // Сыгран ход партии: просто идём по партии дальше.
+      goTo(ply + 1);
+      return;
+    }
+    const before = displayedFen();
+    line = (lineActive() ? line.slice(0, lineCursor + 1) : []).concat([{ uci: move.uci, san: move.san, fenBefore: before, fenAfter: move.fenAfter, score: null }]);
+    lineCursor = line.length - 1;
+    lineText = "";
     render();
-    tryCandidate(fenAt(ply), typed, bridge(() => token === request && !closed), (text, marks, error) => {
+    askEngine();
+  }
+
+  function onSquare(square) {
+    const legal = parseLegal(displayedFen());
+    if (selected) {
+      const candidates = legal.filter((m) => m.from === selected && m.to === square);
+      if (candidates.length === 1) { playMove(candidates[0]); return; }
+      if (candidates.length > 1) { promotion = candidates; render(); return; }
+    }
+    selected = square !== selected && legal.some((m) => m.from === square) ? square : null;
+    render();
+  }
+
+  function explainLineMove() {
+    const move = line[lineCursor];
+    if (!move) return;
+    const token = ++request;
+    lineText = "Тренер разбирает ход " + move.san + "…";
+    render();
+    explain(move.fenBefore, move.uci, game.opening, game.myColor, "true", bridge(() => token === request && !closed), (text, _marks, error) => {
       if (token !== request || closed) return;
-      coachWaiting = false;
-      coachText = error ? "Не удалось разобрать ход: " + error : text;
-      variations = parseVariations(marks);
-      shown = null;
+      lineText = error ? "Не удалось разобрать ход: " + error : text;
       render();
     });
   }
 
-  // Прогресс обновляется точечно: полная перерисовка раз в секунду сбивала бы
-  // прокрутку и ввод своего хода, пока идёт разбор.
-  function showScanProgress() {
-    const bar = app.querySelector(".scan-bar");
-    const label = app.querySelector(".scan-label");
-    if (bar) bar.style.width = Math.round((scan.done / scan.total) * 100) + "%";
-    if (label) label.textContent = "Движок считает партию: " + scan.done + " из " + scan.total + " позиций";
-  }
-
-  async function runScan() {
-    scan = { done: 0, total: positions.length + 1, error: null };
-    render();
-    const fens = [startFen, ...positions.map((p) => p.fenAfter)];
-    const scores = [];
-    try {
-      for (const fen of fens) {
-        if (closed) return;
-        const info = await engine.analyse(fen, SCAN_MOVETIME_MS, 0, 1);
-        const score = scoreToken(info) || terminalScore(fen);
-        if (!score) throw new Error("движок не вернул оценку");
-        scores.push(score);
-        scan.done = scores.length;
-        showScanProgress();
-      }
-      const positionsText = replay(game.moves, game.initialFen);
-      const result = classify(positionsText, scores.join(";"));
-      evaluations = parseEvaluations(result);
-      store.set(cacheKey, result);
-      scan = null;
-    } catch (error) {
-      scan = { done: 0, total: 1, error: error.message };
-    }
-    render();
-  }
-
   function render() {
+    const evaluations = scan.evaluations;
+    const moments = recapResult?.moments || [];
     const moveList = h("div", { class: "moves" });
     positions.forEach((position, index) => {
       if (position.white) moveList.append(h("span", { class: "num" }, position.moveNumber + "."));
@@ -534,62 +791,84 @@ function showReview(game) {
       ));
     });
 
-    const candidateHadFocus = document.activeElement?.classList.contains("candidate");
-    const candidate = h("input", {
-      class: "candidate",
-      placeholder: "Свой ход, например Nf3",
-      "aria-label": "Свой ход",
-      value: candidateText,
-      oninput: (event) => { candidateText = event.target.value; },
-    });
-    const usedStyles = [...new Set(arrows.map((a) => a.style))];
+    const fen = displayedFen();
+    const legal = shown ? [] : parseLegal(fen);
+    const ended = gameEnd(fen);
+    const lastUci = shown ? "" : lineActive() ? (lineCursor >= 0 ? line[lineCursor].uci : "") : (ply > 0 ? positions[ply - 1].uci : "");
+    const boardArrows = shown ? [] : lineActive()
+      ? (engineLines[0] ? [{ uci: engineLines[0].first, style: "BEST_MOVE" }] : [])
+      : arrows;
+    const barScore = lineActive() ? engineLines[0]?.score : (ply > 0 ? evaluations[ply - 1] : null) || engineLines[0]?.score;
+    const usedStyles = lineActive() ? [] : [...new Set(arrows.map((a) => a.style))];
+    const previousMoment = [...moments].reverse().find((m) => m.ply + 1 < ply);
+    const nextMoment = moments.find((m) => m.ply + 1 > ply);
+    const moment = moments.find((m) => m.ply + 1 === ply);
+
     const left = h("div", {},
+      h("div", { class: "engine-lines" }, ended ? h("strong", {}, ended) : engineLines.map((l) => h("div", { class: "engine-line" },
+        h("span", { class: "score" }, shortScore(l.score)),
+        h("span", {}, l.san.map(figurine).join(" ")),
+      ))),
       h("div", { class: "board-row" },
-        shown
-          ? drawBoard(variations[shown.line].fens[shown.step], flipped, "", [])
-          : drawBoard(fenAt(ply), flipped, ply > 0 ? positions[ply - 1].uci : "", arrows),
-        drawEvalBar(ply > 0 ? evaluations[ply - 1] : null, flipped),
+        drawBoard(fen, flipped, lastUci, boardArrows, shown ? null : {
+          selected,
+          targets: legal.filter((m) => m.from === selected).map((m) => m.to),
+          onSquare,
+        }),
+        drawEvalBar(barScore, flipped),
       ),
+      promotion.length ? h("div", { class: "row" }, h("span", { class: "note" }, "Превратить в:"),
+        promotion.slice().sort((a, b) => "qrbn".indexOf(a.promotion) - "qrbn".indexOf(b.promotion))
+          .map((m) => h("button", { onclick: () => playMove(m) }, PROMOTION_NAMES[m.promotion] || m.promotion))) : null,
       usedStyles.length ? h("div", { class: "legend" }, usedStyles.map((style) => h("span", {},
         h("i", { style: "background:" + ARROW_COLORS[style] }), ARROW_NAMES[style] || style))) : null,
       h("div", { class: "controls" },
-        h("button", { onclick: () => goTo(0), "aria-label": "К началу" }, "⏮"),
+        h("button", { onclick: () => previousMoment && goTo(previousMoment.ply + 1), disabled: previousMoment ? undefined : "", "aria-label": "К прошлому ключевому моменту" }, "« Момент"),
         h("button", { onclick: () => goTo(ply - 1), "aria-label": "Назад" }, "◀"),
         h("button", { onclick: () => goTo(ply + 1), "aria-label": "Вперёд" }, "▶"),
-        h("button", { onclick: () => goTo(positions.length), "aria-label": "В конец" }, "⏭"),
+        h("button", { onclick: () => nextMoment && goTo(nextMoment.ply + 1), disabled: nextMoment ? undefined : "", "aria-label": "К следующему ключевому моменту" }, "Момент »"),
       ),
+      h("p", { class: "note" }, lineActive() ? "" : "Свой вариант: нажмите на фигуру и на поле, куда её поставить. Ходить можно за обе стороны."),
     );
 
     const right = h("div", {},
-      h("button", { onclick: () => { closed = true; clearTimeout(timer); document.removeEventListener("keydown", onKey); showGames(); } }, "← К партиям"),
-      h("h2", { style: "margin-top:12px" }, "против " + game.opponent),
-      h("p", { class: "note", style: "margin:0" }, [OUTCOME_TEXT[game.outcome], game.opening].filter(Boolean).join(" · ")),
-      evaluations.length ? drawGraph(evaluations, ply, goTo) : null,
-      scan && !scan.error ? h("div", {},
-        h("div", { class: "progress" }, h("div", { class: "scan-bar", style: "width:" + Math.round((scan.done / scan.total) * 100) + "%" })),
-        h("p", { class: "note scan-label" }, "Движок считает партию: " + scan.done + " из " + scan.total + " позиций"),
-      ) : null,
-      scan && scan.error ? h("p", { class: "error" }, "Разбор не удался: " + scan.error) : null,
-      scan && scan.error ? h("div", { class: "row" },
-        h("button", { class: "primary", onclick: runScan }, "Разобрать ещё раз"),
-      ) : null,
+      h("div", { class: "spread" },
+        h("button", { class: "link", onclick: () => leave(() => showRecap(game)) }, "‹ Итоги"),
+        h("span", { class: "note" }, "против " + game.opponent),
+      ),
+      scanBlock(scan, () => { scans.delete(game.id); leave(() => showReview(game, ply)); }),
+      evaluations.length ? drawGraph(evaluations, positions.length, ply, moments, goTo) : null,
       moveList,
-      coachBlock(coachText, coachWaiting),
-      variations.length ? h("div", { class: "variations" }, variations.map((variation, line) => h("div", { class: "variation" },
+      lineActive() ? h("div", { class: "card user-line" },
+        h("span", { class: "note" }, "Свой вариант"),
+        h("div", { class: "variation" }, line.map((move, index) => h("button", {
+          class: index === lineCursor ? "on" : "",
+          onclick: () => { lineCursor = index; lineText = ""; selected = null; render(); askEngine(); },
+        }, figurine(index === 0 || move.fenBefore.split(" ")[1] === "w"
+          ? move.fenBefore.split(" ")[5] + (move.fenBefore.split(" ")[1] === "w" ? ". " : "... ") + move.san
+          : move.san), h("span", { class: "eval" }, move.score ? " " + shortScore(move.score) : " …")))),
+        h("div", { class: "row" },
+          h("button", { onclick: explainLineMove, disabled: lineCursor >= 0 ? undefined : "" }, "Объяснить ход"),
+          h("button", { class: "link", onclick: () => { line = []; lineCursor = -1; lineText = ""; selected = null; render(); askEngine(); } }, "К партии"),
+        ),
+        lineText ? coachBlock(lineText, lineText.endsWith("…")) : null,
+      ) : null,
+      ply > 0 ? h("div", { class: "card" },
+        h("strong", { class: "headline" }, headline(positions[ply - 1], ply > 1 ? evaluations[ply - 2] : null, evaluations[ply - 1])),
+        moment ? h("p", { class: "moment", style: "color:" + MOMENT_COLORS[moment.kind] }, moment.title.split(" — ")[1] + ": " + moment.detail) : null,
+        gameEnd(positions[ply - 1].fenAfter) ? h("p", {}, h("strong", {}, gameEnd(positions[ply - 1].fenAfter))) : null,
+        coachBlock(coachText || "Тренер думает…", coachWaiting || !coachText),
+      ) : h("div", { class: "card" }, h("strong", {}, "Начальная позиция"), h("p", { class: "note" }, "Выберите ход в списке или нажмите ▶, чтобы тренер его разобрал.")),
+      variations.length ? h("div", { class: "variations" }, variations.map((variation, index) => h("div", { class: "variation" },
         h("span", { class: "note" }, variation.title + ":"),
         variation.san.map((san, step) => h("button", {
-          class: shown && shown.line === line && shown.step === step ? "on" : "",
-          onclick: () => { shown = { line, step }; render(); },
+          class: shown && shown.line === index && shown.step === step ? "on" : "",
+          onclick: () => { shown = { line: index, step }; selected = null; render(); },
         }, figurine(san))),
       )), shown ? h("button", { onclick: () => { shown = null; render(); } }, "Вернуться к партии") : null) : null,
-      h("form", {
-        class: "row",
-        onsubmit: (event) => { event.preventDefault(); submitCandidate(candidate.value); },
-      }, candidate, h("button", { type: "submit" }, "А если так?")),
     );
 
     app.replaceChildren(h("div", { class: "review" }, left, right));
-    if (candidateHadFocus) candidate.focus();
     moveList.querySelector(".on")?.scrollIntoView({ block: "nearest" });
   }
 
@@ -600,11 +879,8 @@ function showReview(game) {
   }
   document.addEventListener("keydown", onKey);
 
-  render();
   window.scrollTo(0, 0);
-  goTo(0);
-  // Разбор всей партии стартует сам: сразу видно, какие ходы ключевые.
-  if (!evaluations.length) runScan();
+  goTo(startPly);
 }
 
 // ---------- Запуск ----------

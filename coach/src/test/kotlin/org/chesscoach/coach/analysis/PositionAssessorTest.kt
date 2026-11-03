@@ -52,6 +52,18 @@ class PositionAssessorTest {
         assertEquals(PositionCharacter.SEMI_OPEN, section.character)
     }
 
+    // ——— План развития ———
+
+    @Test
+    fun `developed minor pieces with castling still pending give a plan, not a crash`() {
+        // Позиция из партии пользователя: лёгкие фигуры белых вышли, король в центре.
+        // Раньше план без неразвитых фигур оставался без доказательства и разбор падал.
+        val fen = "rn1qkb1r/pp2p1pp/2p2p2/3nNb2/2BPp3/2N1B3/PPP2PPP/R2QK2R w KQkq - 0 8"
+        val opening = FeatureSet.empty(fen).copy(phase = org.chesscoach.coach.model.GamePhase.OPENING)
+        val plan = PositionAssessor.assess(fen, opening, Side.WHITE).developmentPlan
+        assertTrue(plan != null && plan.castlingPending && plan.undeveloped.isEmpty())
+    }
+
     // ——— Идеи ———
 
     @Test

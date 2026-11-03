@@ -73,7 +73,8 @@ class TextRendererNewSectionsTest {
             character = PositionCharacter.OPEN,
             ideas = listOf(StrategicIdea.ATTACK_KING, StrategicIdea.FORCE_EXCHANGES),
         )
-        val text = TextRenderer.render(explanation(listOf(section)))
+        // Идея стоит в плане своей стороны, а не в общей оценке позиции.
+        val text = TextRenderer.render(explanation(listOf(section, Section.MyAttack(emptyList(), emptyList(), emptyList()))))
 
         assertTrue(text, text.contains("Идея: атаковать короля, форсировать размены."))
     }
@@ -99,7 +100,7 @@ class TextRendererNewSectionsTest {
             favours = Side.WHITE,
             evidence = Evidence.of(Square.G8),
         )
-        val text = TextRenderer.render(explanation(listOf(Section.MyPosition(listOf(myKing), emptyList()))))
+        val text = TextRenderer.render(explanation(listOf(Section.MyPosition(listOf(myKing), emptyList()))), viewer = Side.BLACK)
 
         // Список пунктов одинаков от позиции к позиции: иначе читатель не
         // знает, что тренер проверил, а что молча пропустил.
@@ -111,7 +112,7 @@ class TextRendererNewSectionsTest {
 
     @Test
     fun `my position with nothing at all still answers every item`() {
-        val text = TextRenderer.render(explanation(listOf(Section.MyPosition(emptyList(), emptyList()))))
+        val text = TextRenderer.render(explanation(listOf(Section.MyPosition(emptyList(), emptyList()))), viewer = Side.BLACK)
 
         assertTrue(text, text.contains("ПЛАН СОПЕРНИКА"))
         assertTrue(text, text.contains("1. Шахи и маты: нет."))
@@ -214,7 +215,7 @@ class TextRendererNewSectionsTest {
                 pieces = mapOf(Square.D1 to Piece.BLACK_ROOK, Square.E2 to Piece.BLACK_QUEEN),
             ),
         )
-        val text = TextRenderer.render(explanation(listOf(Section.MyAttack(emptyList(), listOf(fork), emptyList()))))
+        val text = TextRenderer.render(explanation(listOf(Section.MyAttack(emptyList(), listOf(fork), emptyList()))), viewer = Side.BLACK)
 
         assertTrue(text, text.contains("МОЙ ПЛАН"))
         assertTrue(text, text.contains("2. Взятия:"))
@@ -223,7 +224,7 @@ class TextRendererNewSectionsTest {
 
     @Test
     fun `my attack with nothing at all still answers every item`() {
-        val text = TextRenderer.render(explanation(listOf(Section.MyAttack(emptyList(), emptyList(), emptyList()))))
+        val text = TextRenderer.render(explanation(listOf(Section.MyAttack(emptyList(), emptyList(), emptyList()))), viewer = Side.BLACK)
 
         assertTrue(text, text.contains("МОЙ ПЛАН"))
         assertTrue(text, text.contains("1. Шахи и маты: нет."))

@@ -46,7 +46,7 @@ class LichessApi internal constructor(
     suspend fun recentGames(username: String, max: Int = 50): List<GameSummary> =
         withContext(Dispatchers.IO) {
             val url = "${LichessEndpoints.API_BASE}/api/games/user/$username" +
-                "?max=$max&moves=true&opening=true&sort=dateDesc"
+                "?max=$max&moves=true&opening=true&clocks=true&sort=dateDesc"
 
             val body = get(url, accept = "application/x-ndjson")
 

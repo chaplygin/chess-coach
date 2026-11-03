@@ -114,7 +114,14 @@ object TextRenderer {
     /** Выше этого числа точная цифра теряет смысл: упущенный мат даёт десятки пешек. */
     private const val COLLAPSE_CP = 1000
 
-    fun render(explanation: PositionExplanation): String {
+    /**
+     * [viewer] — цвет читателя, если он известен (разбор своей партии). Тогда
+     * планы подписаны "мой" и "соперника" относительно него, а не стороны, чей
+     * ход: иначе на ходах соперника блоки менялись местами. Без читателя планы
+     * подписаны цветом. [scoreLines] — печатать ли строки "оценка до и после хода":
+     * экран разбора партии показывает их сам в заголовке хода.
+     */
+    fun render(explanation: PositionExplanation, viewer: Side? = null, scoreLines: Boolean = true): String {
         val glossary = Glossary()
         val pool = TemplatePool(explanation.fen)
         val memory = RenderMemory()
@@ -124,12 +131,12 @@ object TextRenderer {
         val forkedSquares = collectAllFacts(explanation).filterIsInstance<ForkFact>().flatMap { it.targets }.toSet()
 
         val body = buildString {
-            append(header(explanation))
+            append(header(explanation, scoreLines))
             for (section in explanation.sections) {
                 val sectionBody = renderSection(section, explanation, pool, glossary, memory, forkedSquares) ?: continue
                 appendLine()
                 appendLine()
-                append(titleOf(section, explanation))
+                append(titleOf(section, explanation, viewer))
                 appendLine()
                 append(sectionBody)
             }
@@ -173,7 +180,7 @@ object TextRenderer {
 
     // ——— Шапка ———
 
-    private fun header(explanation: PositionExplanation): String {
+    private fun header(explanation: PositionExplanation, scoreLines: Boolean): String {
         val moveNumber = MoveNotation.fullMoveNumber(explanation.fen)
         val sideLabel = SideLexicon.name(explanation.sideToMove)
         val played = explanation.section<Section.PlayedMove>()
@@ -189,7 +196,7 @@ object TextRenderer {
             title,
             verdictLine(explanation),
             worseMoveLine(explanation),
-            scoreLine(explanation, played),
+            scoreLine(explanation, played)?.takeIf { scoreLines },
             // Строка "Сыгранное хуже" уже сказала то же самое с вариантом.
             played?.takeUnless { worseMoveLine(explanation)?.startsWith(PLAYED_WORSE) == true }?.let(::summaryLine),
         ).joinToString(System.lineSeparator())
@@ -320,11 +327,12 @@ object TextRenderer {
 
     // ——— Заголовки и тела разделов ———
 
-    private fun titleOf(section: Section, explanation: PositionExplanation): String = when (section) {
+    private fun titleOf(section: Section, explanation: PositionExplanation, viewer: Side?): String = when (section) {
         is Section.EvalReason -> "ПОЧЕМУ ТАКАЯ ОЦЕНКА"
         is Section.PositionAssessment -> "ПОЗИЦИЯ"
-        is Section.MyPosition -> "ПЛАН СОПЕРНИКА"
-        is Section.MyAttack -> "МОЙ ПЛАН"
+        // Планы: МОЯ ПОЗИЦИЯ — это план соперника стороны, чей ход, МОЯ АТАКА — её собственный.
+        is Section.MyPosition -> planTitle(explanation.sideToMove.flip(), viewer)
+        is Section.MyAttack -> planTitle(explanation.sideToMove, viewer)
         is Section.BestMoves -> "ЛУЧШИЙ ХОД"
         is Section.WhyThisMove ->
             "ПОЧЕМУ ${SanRuFormatter.move(section.moveSan)}${playedMatchMark(explanation)}"
@@ -334,6 +342,12 @@ object TextRenderer {
         is Section.Prophylaxis -> "ПРОФИЛАКТИКА"
         is Section.Trap -> "ЕСЛИ СЫГРАТЬ ИНАЧЕ"
         is Section.Alternatives -> "ДРУГИЕ ХОДЫ"
+    }
+
+    private fun planTitle(owner: Side, viewer: Side?): String = when (viewer) {
+        null -> "ПЛАН " + SideLexicon.name(owner, GrammaticalCase.GENITIVE).uppercase()
+        owner -> "МОЙ ПЛАН"
+        else -> "ПЛАН СОПЕРНИКА"
     }
 
     /**
@@ -385,8 +399,8 @@ object TextRenderer {
     ): String? = when (section) {
         is Section.EvalReason -> evalReasonBody(section, glossary)
         is Section.PositionAssessment -> positionAssessmentBody(section)
-        is Section.MyPosition -> myPositionBody(section, pool, glossary, memory, forkedSquares)
-        is Section.MyAttack -> myAttackBody(section, glossary, memory, forkedSquares)
+        is Section.MyPosition -> myPositionBody(section, explanation, pool, glossary, memory, forkedSquares)
+        is Section.MyAttack -> myAttackBody(section, explanation, glossary, memory, forkedSquares)
         is Section.BestMoves -> bestMovesBody(section, glossary, memory, forkedSquares)
         is Section.WhyThisMove -> whyThisMoveBody(section, explanation, glossary, memory, forkedSquares)
         is Section.PlayedMove -> playedMoveBody(section, explanation)
@@ -495,7 +509,6 @@ object TextRenderer {
         section.opening?.takeIf { it.isNotBlank() }?.let { lines += "Дебют: $it." }
         lines += materialAssessmentLine(section)
         characterLine(section.character)?.let { lines += it }
-        ideasLine(section.ideas, section.developmentPlan)?.let { lines += it }
         return lines.joinToString(System.lineSeparator())
     }
 
@@ -612,6 +625,7 @@ object TextRenderer {
      */
     private fun myPositionBody(
         section: Section.MyPosition,
+        explanation: PositionExplanation,
         pool: TemplatePool,
         glossary: Glossary,
         memory: RenderMemory,
@@ -621,36 +635,54 @@ object TextRenderer {
         val threatSentences = threatSentences(threat, pool, glossary, memory, forkedSquares)
         val threatIsMate = threat != null && threatMates(threat)
         val threatIsCapture = !threatIsMate && threat?.opponentMoveSan?.contains('x') == true
+        val mover = explanation.sideToMove
 
         val (backRank, loose) = section.loosePieces.partition { it is BackRankFact }
         return checkList(
-            mates = statementsFor(backRank, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON) +
-                threatSentences.takeIf { threatIsMate }.orEmpty() +
+            mates = mateSentences(section.mates) +
+                statementsFor(backRank, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON) +
+                threatSentences.takeIf { threatIsMate && section.mates.isEmpty() }.orEmpty() +
                 checksSentences(section.checks),
             captures = statementsFor(loose, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON) +
                 threatSentences.takeIf { threatIsCapture }.orEmpty(),
             active = threatSentences.takeUnless { threatIsMate || threatIsCapture }.orEmpty() +
                 adviceSentences(section.advice, glossary, memory, forkedSquares) +
                 statementsFor(section.kingSafety, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON) +
-                planSentences(section.opponentPlan, glossary, forkedSquares, forOpponent = true),
+                planSentences(section.opponentPlan, glossary, forkedSquares, targetSide = mover),
             exchanges = statementsFor(section.exchanges, forkedSquares, glossary, memory, MAX_EXCHANGES),
-        )
+        ) + ideaLine(explanation.section<Section.PositionAssessment>()?.opponentDevelopmentPlan, emptyList())
     }
 
     private fun myAttackBody(
         section: Section.MyAttack,
+        explanation: PositionExplanation,
         glossary: Glossary,
         memory: RenderMemory,
         forkedSquares: Set<Square>,
-    ): String = checkList(
-        mates = statementsFor(section.mate, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON) +
-            checksSentences(section.checks),
-        captures = statementsFor(section.captures, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON),
-        active = adviceSentences(section.advice, glossary, memory, forkedSquares) +
-            statementsFor(section.activity, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON) +
-            planSentences(section.plan, glossary, forkedSquares, forOpponent = false),
-        exchanges = statementsFor(section.exchanges, forkedSquares, glossary, memory, MAX_EXCHANGES),
-    )
+    ): String {
+        val assessment = explanation.section<Section.PositionAssessment>()
+        val (engineMates, mateFacts) = section.mate.partition { it is MateFact }
+        return checkList(
+            mates = mateSentences(section.mates) +
+                engineMates.filterIsInstance<MateFact>().map { "Есть форсированный мат в ${it.movesToMate} ${movesWord(it.movesToMate)}." } +
+                statementsFor(mateFacts, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON) +
+                checksSentences(section.checks),
+            captures = statementsFor(section.captures, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON),
+            active = adviceSentences(section.advice, glossary, memory, forkedSquares) +
+                statementsFor(section.activity, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON) +
+                planSentences(section.plan, glossary, forkedSquares, targetSide = explanation.sideToMove.flip()),
+            exchanges = statementsFor(section.exchanges, forkedSquares, glossary, memory, MAX_EXCHANGES),
+        ) + ideaLine(assessment?.developmentPlan, assessment?.ideas.orEmpty())
+    }
+
+    /** "Идея" стоит в плане той стороны, чья она: в общей оценке позиции было непонятно, чья. */
+    private fun ideaLine(plan: DevelopmentPlan?, ideas: List<StrategicIdea>): String =
+        ideasLine(ideas, plan)?.let { System.lineSeparator() + it }.orEmpty()
+
+    private fun mateSentences(mates: List<String>): List<String> {
+        if (mates.isEmpty()) return emptyList()
+        return listOf("Мат ходом " + mates.joinToString(" или ") { SanRuFormatter.move(it) } + ".")
+    }
 
     private fun checksSentences(checks: List<String>): List<String> {
         if (checks.isEmpty()) return emptyList()
@@ -766,7 +798,7 @@ object TextRenderer {
         steps: List<PlanStep>,
         glossary: Glossary,
         forkedSquares: Set<Square>,
-        forOpponent: Boolean,
+        targetSide: Side,
     ): List<String> {
         val memory = RenderMemory()
         // Шаги с одной и той же идеей сливаем в одну фразу. Иначе план на три
@@ -775,7 +807,7 @@ object TextRenderer {
         return steps
             .groupBy { it.idea }
             .mapNotNull { (idea, group) ->
-                planStepSentence(idea, group.flatMap { it.facts }, glossary, memory, forkedSquares, forOpponent)
+                planStepSentence(idea, group.flatMap { it.facts }, glossary, memory, forkedSquares, targetSide)
             }
     }
 
@@ -1066,6 +1098,7 @@ object TextRenderer {
      * лучше промолчать, чем выдумывать формулировку.
      */
     private fun missedPhrase(fact: Fact): String? = when (fact) {
+        is MateFact -> if (fact.movesToMate == 1) "мат в один ход" else "форсированный мат в ${fact.movesToMate} ${movesWord(fact.movesToMate)}"
         is ForkFact -> "вилку на " + russianList(fact.targets.map { sq(it) })
         is PinFact -> if (fact.absolute) "связку на " + sq(fact.pinned) else "связку по " + sq(fact.pinned)
         is SkewerFact -> "рентген на " + sq(fact.behind)
@@ -1106,21 +1139,21 @@ object TextRenderer {
         glossary: Glossary,
         memory: RenderMemory,
         forkedSquares: Set<Square>,
-        forOpponent: Boolean,
+        targetSide: Side,
     ): String? {
         // План перечисляет цели, а не пересказывает признаки: три подряд
         // предложения "пешка на d5 изолирована" отличаются одним полем и
         // читаются как заевшая пластинка.
         val targets = facts.mapNotNull(::planTarget).distinct()
         if (targets.size == facts.size) {
-            return planIdeaPhrase(idea, targets.size, forOpponent) + ": " + russianList(targets) + "."
+            return planIdeaPhrase(idea, targets.size, targetSide) + ": " + russianList(targets) + "."
         }
 
         val statements = statementsFor(facts, forkedSquares, glossary, memory)
         if (statements.isEmpty()) return null
         // factStatement собирает самостоятельное предложение с заглавной буквы;
         // тут оно идёт придаточным после двоеточия, поэтому строчная уместнее.
-        return planIdeaPhrase(idea, statements.size, forOpponent) + ": " +
+        return planIdeaPhrase(idea, statements.size, targetSide) + ": " +
             statements.joinToString(" ") { decapitalize(it) }
     }
 
@@ -1140,11 +1173,11 @@ object TextRenderer {
 
     /**
      * [count] — сколько признаков попало в один шаг: от этого зависит число в
-     * фразе. [forOpponent] переворачивает притяжательные слова: под заголовком
-     * "План соперника" фраза "давить на слабые пешки соперника" означала бы,
-     * что соперник давит сам на себя.
+     * фразе. [targetSide] — чьи пешки слабые: называем цвет, а не "мои" и
+     * "соперника". Заголовок плана зависит от того, за кого играл читатель, и
+     * притяжательное слово под ним то и дело означало бы не ту сторону.
      */
-    private fun planIdeaPhrase(idea: PlanIdea, count: Int, forOpponent: Boolean): String = when (idea) {
+    private fun planIdeaPhrase(idea: PlanIdea, count: Int, targetSide: Side): String = when (idea) {
         PlanIdea.OCCUPY_OUTPOST ->
             if (count > 1) "Держать фигуры на форпостах" else "Держать фигуру на форпосте"
 
@@ -1154,12 +1187,9 @@ object TextRenderer {
         PlanIdea.ADVANCE_PASSED_PAWN ->
             if (count > 1) "Двигать проходные пешки вперёд" else "Двигать проходную пешку вперёд"
 
-        PlanIdea.TARGET_WEAK_PAWN -> when {
-            forOpponent && count > 1 -> "Давить на мои слабые пешки"
-            forOpponent -> "Давить на мою слабую пешку"
-            count > 1 -> "Давить на слабые пешки соперника"
-            else -> "Давить на слабую пешку соперника"
-        }
+        PlanIdea.TARGET_WEAK_PAWN ->
+            (if (count > 1) "Давить на слабые пешки " else "Давить на слабую пешку ") +
+                SideLexicon.name(targetSide, GrammaticalCase.GENITIVE)
 
         PlanIdea.ATTACK_KING -> "Продолжать давление на короля"
         PlanIdea.IMPROVE_WORST_PIECE -> "Улучшать положение худшей фигуры"
@@ -1397,7 +1427,11 @@ object TextRenderer {
             "$term на ${sq(fact.defender)} $verb успевать сразу на $duties."
         }
 
-        is MateFact -> "Мат в ${fact.movesToMate} ${movesWord(fact.movesToMate)}."
+        is MateFact -> if (fact.movesToMate == 1) {
+            "Ставит мат."
+        } else {
+            "Форсированный мат в ${fact.movesToMate} ${movesWord(fact.movesToMate)}."
+        }
 
         is KingSafetyFact -> {
             // Чей это король, называем всегда, а не только когда "и так понятно":

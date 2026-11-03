@@ -21,7 +21,7 @@ class GameAnalysisRunner(private val engine: EngineController) {
 
     suspend fun analyze(
         positions: List<PlyPosition>,
-        onProgress: (done: Int, total: Int) -> Unit = { _, _ -> },
+        onProgress: (done: Int, total: Int, partial: List<PlyEvaluation>) -> Unit = { _, _, _ -> },
     ): Result<List<PlyEvaluation>> {
         if (positions.isEmpty()) return Result.success(emptyList())
 
@@ -46,7 +46,9 @@ class GameAnalysisRunner(private val engine: EngineController) {
                     IllegalStateException("Движок не вернул оценку для позиции $index из ${fens.size}")
                 )
             scores += score
-            onProgress(index.coerceAtMost(positions.size), positions.size)
+            // Ход i оценён, как только посчитана позиция после него: график растёт по ходу скана.
+            val partial = if (scores.size >= 2) GameAnalyzer.classify(positions.take(scores.size - 1), scores) else emptyList()
+            onProgress(index.coerceAtMost(positions.size), positions.size, partial)
         }
 
         return Result.success(GameAnalyzer.classify(positions, scores))

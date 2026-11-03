@@ -11,7 +11,7 @@ import androidx.compose.ui.platform.LocalContext
 import org.chesscoach.app.AppContainer
 import org.chesscoach.core.GameSummary
 
-enum class Screen { LOGIN, MENU, GAMES, PHOTO, REVIEW, ENGINE, LIVE, SETTINGS }
+enum class Screen { LOGIN, MENU, GAMES, PHOTO, RECAP, REVIEW, ENGINE, LIVE, SETTINGS }
 
 @Composable
 fun AppRoot(redirect: Uri?, onRedirectHandled: () -> Unit) {
@@ -24,6 +24,8 @@ fun AppRoot(redirect: Uri?, onRedirectHandled: () -> Unit) {
     var authError by remember { mutableStateOf<String?>(null) }
     var completingLogin by remember { mutableStateOf(false) }
     var selectedGame by remember { mutableStateOf<GameSummary?>(null) }
+    var reviewPly by remember { mutableStateOf(-1) }
+    var openReport by remember { mutableStateOf(false) }
 
     LaunchedEffect(redirect) {
         val uri = redirect ?: return@LaunchedEffect
@@ -59,22 +61,30 @@ fun AppRoot(redirect: Uri?, onRedirectHandled: () -> Unit) {
 
         Screen.MENU -> MainMenuScreen(
             container = container,
-            onOpenGames = { screen = Screen.GAMES },
+            onOpenGames = {
+                openReport = false
+                screen = Screen.GAMES
+            },
+            onOpenReport = {
+                openReport = true
+                screen = Screen.GAMES
+            },
+            onOpenGame = { game ->
+                selectedGame = game
+                screen = Screen.RECAP
+            },
             onOpenPhoto = { screen = Screen.PHOTO },
             onOpenLiveGame = { screen = Screen.LIVE },
             onOpenSettings = { screen = Screen.SETTINGS },
-            onSignOut = {
-                container.tokenStore.signOut()
-                screen = Screen.LOGIN
-            },
         )
 
         Screen.GAMES -> GameListScreen(
             container = container,
+            openReport = openReport,
             onBack = { screen = Screen.MENU },
             onOpenGame = { game ->
                 selectedGame = game
-                screen = Screen.REVIEW
+                screen = Screen.RECAP
             },
         )
 
@@ -82,6 +92,23 @@ fun AppRoot(redirect: Uri?, onRedirectHandled: () -> Unit) {
             container = container,
             onBack = { screen = Screen.MENU },
         )
+
+        Screen.RECAP -> {
+            val game = selectedGame
+            if (game == null) {
+                screen = Screen.GAMES
+            } else {
+                GameRecapScreen(
+                    container = container,
+                    game = game,
+                    onBack = { screen = Screen.GAMES },
+                    onOpenMove = { ply ->
+                        reviewPly = ply
+                        screen = Screen.REVIEW
+                    },
+                )
+            }
+        }
 
         Screen.REVIEW -> {
             val game = selectedGame
@@ -91,7 +118,8 @@ fun AppRoot(redirect: Uri?, onRedirectHandled: () -> Unit) {
                 GameReviewScreen(
                     container = container,
                     game = game,
-                    onBack = { screen = Screen.GAMES },
+                    initialPly = reviewPly,
+                    onBack = { screen = Screen.RECAP },
                 )
             }
         }

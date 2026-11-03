@@ -15,7 +15,9 @@ import org.chesscoach.coach.model.CoachThresholds
 import org.chesscoach.coach.model.HumanMove
 import org.chesscoach.coach.model.DevelopmentFact
 import org.chesscoach.coach.model.DiscoveredAttackFact
+import org.chesscoach.coach.model.Evidence
 import org.chesscoach.coach.model.ExchangeFact
+import org.chesscoach.coach.model.Reason
 import org.chesscoach.coach.model.EndgameFact
 import org.chesscoach.coach.model.Fact
 import org.chesscoach.coach.model.ForkThreatFact
@@ -113,14 +115,14 @@ class PipelineOrchestrator(
         bestLine?.let { lineAnalyzer.analyse(fen, it) }?.let { sections += it }
         sections += PositionAssessor.assess(fen, featuresBefore, sideToMove, opening)
         sections += myPositionSection(fen, featuresBefore, sideToMove, threat, opponentAdvice(fen, featuresBefore, sideToMove))
-        sections += myAttackSection(fen, featuresBefore, sideToMove, ownAdvice(fen, featuresBefore, sideToMove, bestLine))
+        sections += myAttackSection(fen, featuresBefore, sideToMove, ownAdvice(fen, featuresBefore, sideToMove, bestLine), bestLine)
 
         // 4. Почему лучший ход хорош, профилактика и разбор сыгранного хода
         // в сравнении с лучшим.
         var classification: MoveClassification? = null
         if (bestLine != null && bestMoveUci != null) {
             val bestDiff = reasonDiffAnalyzer.analyse(fen, bestMoveUci, bestLine.score)
-            bestDiff.whyThisMove
+            withMateFirst(bestDiff.whyThisMove, bestMoveSan, bestLine, sideToMove)
                 ?.let {
                     it.copy(
                         pointIsInTheLine = pointIsInTheLine(it, bestLine, mainLines),
@@ -157,7 +159,10 @@ class PipelineOrchestrator(
                     // разница закономерно пустая.
                     val bestFacts = bestDiff.whyThisMove?.reasons?.flatMap { it.facts } ?: emptyList()
                     val playedFacts = playedDiff.whyThisMove?.reasons?.flatMap { it.facts } ?: emptyList()
-                    val missed = bestFacts.filterNot { it in playedFacts }
+                    // Упущенный мат и есть упущенное: вилка с королём при нём ничего не добавляет.
+                    val missedMate = engineMateFact(bestLine, sideToMove)
+                    val missed = listOfNotNull(missedMate) +
+                        bestFacts.filterNot { it in playedFacts || (missedMate != null && it is ForkFact) }
 
                     val playedSan = MoveNotation.uciToSanOrRaw(fen, listOf(playedMoveUci)).first()
                     val playedPv = mainLines.firstOrNull { it.pv.firstOrNull() == playedMoveUci }?.pv
@@ -274,6 +279,7 @@ class PipelineOrchestrator(
             exchanges = features.favouring(opponent).filterIsInstance<ExchangeFact>(),
             checks = SafeChecks.of(fen, mover.flip()),
             advice = advice,
+            mates = MatingMoves.of(fen, mover.flip()),
         )
     }
 
@@ -283,9 +289,13 @@ class PipelineOrchestrator(
         features: FeatureSet,
         mover: Side,
         advice: List<CheckedAdvice>,
+        bestLine: EngineLine?,
     ): Section {
         val mine = features.favouring(mover)
-        val mate = mine.filter { it is MateFact || it is BackRankFact }
+        val matesInOne = MatingMoves.of(fen, mover)
+        // Мат в один ход виден по доске и назван поимённо; дальний мат знает только движок.
+        val engineMate = engineMateFact(bestLine, mover).takeIf { matesInOne.isEmpty() }
+        val mate = listOfNotNull(engineMate) + mine.filter { it is MateFact || it is BackRankFact }
         // Во "взятиях" только то, что можно забрать. Связка или удар следующим
         // ходом ничего пока не берут: это активные ходы.
         val captures = mine.filter {
@@ -306,7 +316,35 @@ class PipelineOrchestrator(
             exchanges = mine.filterIsInstance<ExchangeFact>(),
             checks = SafeChecks.of(fen, mover),
             advice = advice,
+            mates = matesInOne,
         )
+    }
+
+    /**
+     * Когда лучший ход ведёт к мату, мат и есть причина. Вилка на короля и пешку
+     * рядом с ним только сбивает: пешку никто брать не будет.
+     */
+    private fun withMateFirst(
+        why: Section.WhyThisMove?,
+        bestMoveSan: String,
+        bestLine: EngineLine,
+        mover: Side,
+    ): Section.WhyThisMove? {
+        val mate = engineMateFact(bestLine, mover) ?: return why
+        val rest = why?.reasons.orEmpty().mapNotNull { reason ->
+            reason.facts.filterNot { it is ForkFact || it is MateFact }
+                .takeIf { it.isNotEmpty() }
+                ?.let { Reason(reason.tier, it) }
+        }
+        val reasons = listOf(Reason(ReasonTier.MATERIAL_TACTICS, listOf(mate))) + rest
+        return why?.copy(reasons = reasons, pointIsInTheLine = false) ?: Section.WhyThisMove(bestMoveSan, reasons)
+    }
+
+    /** Мат за [mover], если лучшая линия движка его находит. */
+    private fun engineMateFact(bestLine: EngineLine?, mover: Side): MateFact? {
+        val score = bestLine?.score as? Score.Mate ?: return null
+        if (score.movesToMate <= 0) return null
+        return MateFact(score.movesToMate, mover, Evidence.fromEngine(bestLine))
     }
 
     /**
@@ -321,6 +359,8 @@ class PipelineOrchestrator(
         bestLine: EngineLine?,
     ): List<CheckedAdvice> = features.favouring(mover).filter(::isNextMoveAdvice).mapNotNull { fact ->
         val uci = adviceMove(fact) ?: return@mapNotNull null
+        // Матующий ход уже назван в пункте "Шахи и маты": вилкой его не пересказываем.
+        if (MatingMoves.gives(fen, uci)) return@mapNotNull null
         val after = applyUciMove(fen, uci) ?: return@mapNotNull null
         val score = when {
             bestLine == null -> null

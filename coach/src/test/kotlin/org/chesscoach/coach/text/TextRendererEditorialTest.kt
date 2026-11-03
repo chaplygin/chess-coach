@@ -154,7 +154,7 @@ class TextRendererEditorialTest {
             Section.MyPosition(kingSafety = listOf(kingSafety), loosePieces = emptyList()),
         )
 
-        val text = TextRenderer.render(explanation(sections))
+        val text = TextRenderer.render(explanation(sections), viewer = Side.BLACK)
 
         // Факт целиком ушёл в причины хода, поэтому свою строку в ПЛАН СОПЕРНИКА
         // он занять уже не может. Раздел всё равно печатается — с честным

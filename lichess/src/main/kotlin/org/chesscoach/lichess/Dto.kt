@@ -68,6 +68,9 @@ data class GameDto(
     val opening: OpeningDto? = null,
     val players: PlayersDto = PlayersDto(),
     @SerialName("initialFen") val initialFen: String? = null,
+    /** Остаток на часах после каждого полухода, сотые секунды. Приходит при clocks=true. */
+    val clocks: List<Int> = emptyList(),
+    val clock: ClockDto? = null,
 ) {
 
     /**
@@ -108,9 +111,17 @@ data class GameDto(
             openingName = opening?.name,
             movesSan = moves.split(' ').filter { it.isNotBlank() },
             initialFen = initialFen,
+            clocksCs = clocks,
+            initialClockSeconds = clock?.initial,
         )
     }
 }
+
+@Serializable
+data class ClockDto(
+    val initial: Int? = null,
+    val increment: Int? = null,
+)
 
 @Serializable
 data class NowPlayingDto(
