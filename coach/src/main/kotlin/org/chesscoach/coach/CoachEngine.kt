@@ -77,7 +77,9 @@ class CoachEngine(engineClient: EngineClient) {
         fen: String,
         playedMoveUci: String? = null,
         opening: String? = null,
-    ): PositionExplanation = pipeline.explain(fen, playedMoveUci, opening)
+        previousFen: String? = null,
+        previousMoveUci: String? = null,
+    ): PositionExplanation = pipeline.explain(fen, playedMoveUci, opening, previousFen, previousMoveUci)
 
     /** Готовый разбор тренера на русском. */
     suspend fun explainAsText(

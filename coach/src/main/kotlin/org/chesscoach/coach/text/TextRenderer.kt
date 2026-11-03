@@ -44,6 +44,9 @@ import org.chesscoach.coach.model.PlanIdea
 import org.chesscoach.coach.model.PlanStep
 import org.chesscoach.coach.model.PositionCharacter
 import org.chesscoach.coach.model.PositionExplanation
+import org.chesscoach.coach.model.PreviousMove
+import org.chesscoach.coach.model.NaturalMove
+import org.chesscoach.coach.model.HumanMove
 import org.chesscoach.coach.model.ProphylaxisFact
 import org.chesscoach.coach.model.Reason
 import org.chesscoach.coach.model.ReasonTier
@@ -132,10 +135,27 @@ object TextRenderer {
 
         val body = buildString {
             append(header(explanation, scoreLines))
-            for (section in explanation.sections) {
+            var group: String? = null
+            for (section in readingOrder(explanation, viewer)) {
+                // Оценка до хода и общая справка о позиции — один блок: раньше это
+                // были два раздела, и материал называли дважды.
+                if (section is Section.EvalReason && explanation.section<Section.PositionAssessment>() != null) continue
                 val sectionBody = renderSection(section, explanation, pool, glossary, memory, forkedSquares) ?: continue
+                val sectionGroup = groupOf(section, explanation, viewer)
                 appendLine()
                 appendLine()
+                if (sectionGroup != group) {
+                    group = sectionGroup
+                    append(GROUP_MARK + " " + sectionGroup + " " + GROUP_MARK)
+                    // Заголовок группы и есть заголовок этих разделов: второй раз не повторяем.
+                    if (section is Section.PositionAssessment || section is Section.AfterMove || section is Section.EvalReason) {
+                        appendLine()
+                        append(sectionBody)
+                        continue
+                    }
+                    appendLine()
+                    appendLine()
+                }
                 append(titleOf(section, explanation, viewer))
                 appendLine()
                 append(sectionBody)
@@ -216,6 +236,7 @@ object TextRenderer {
             (score.movesToMate > 0) == (explanation.sideToMove == Side.WHITE)
         if (moverMates) return ": ведёт к мату."
         capturedPhrase(explanation)?.let { return ": $it." }
+        escapePhrase(explanation)?.let { return ": " + decapitalize(it) }
 
         val why = explanation.section<Section.WhyThisMove>()
         val forked = collectAllFacts(explanation).filterIsInstance<ForkFact>().flatMap { it.targets }.toSet()
@@ -232,7 +253,36 @@ object TextRenderer {
         if (!runCatching { board.loadFromFen(explanation.fen) }.isSuccess) return null
         val target = Square.valueOf(uci.substring(2, 4).uppercase())
         val type = board.getPiece(target).pieceType ?: return null
+        val taker = board.getPiece(Square.valueOf(uci.substring(0, 2).uppercase())).pieceType
+        // Взятие, на которое тут же берут обратно, — это размен, а не выигрыш:
+        // "берёт пешку d4" после exd4 Nxd4 обещает пешку, которой нет.
+        val line = explanation.section<Section.BestMoves>()?.computerLineUci.orEmpty()
+        val recaptured = line.getOrNull(1)?.substring(2, 4) == uci.substring(2, 4)
+        if (recaptured && taker != null && SeeCalculator.value(taker) == SeeCalculator.value(type)) {
+            val san = explanation.section<Section.BestMoves>()?.computerLineSan.orEmpty().take(2)
+            return "начинает размен на " + sq(target) + ": " + SanRuFormatter.line(san) + ", " +
+                PieceLexicon.name(taker) + " за " + PieceLexicon.name(type, GrammaticalCase.ACCUSATIVE)
+        }
         return "берёт " + PieceLexicon.name(type, GrammaticalCase.ACCUSATIVE) + " " + sq(target)
+    }
+
+    /**
+     * "Уводит слона с h4 из-под удара gxh4." Фигура лучшего хода стоит под боем
+     * или под угрозой соперника — значит, первое, что делает ход, это спасает её.
+     * Без этой фразы тренер объяснял Bg3 сдвоенными пешками.
+     */
+    private fun escapePhrase(explanation: PositionExplanation): String? {
+        val uci = explanation.bestMoveUci.takeIf { it.length >= 4 } ?: return null
+        val from = runCatching { Square.valueOf(uci.substring(0, 2).uppercase()) }.getOrNull() ?: return null
+        val position = explanation.section<Section.MyPosition>() ?: return null
+        val threatHits = position.threat?.opponentMoveUci?.drop(2)?.take(2)?.uppercase() == from.name
+        val hanging = position.loosePieces.filterIsInstance<HangingPieceFact>().firstOrNull { it.square == from }
+        if (!threatHits && hanging == null) return null
+        val board = Board()
+        if (!runCatching { board.loadFromFen(explanation.fen) }.isSuccess) return null
+        val type = board.getPiece(from).pieceType ?: return null
+        val blow = position.threat?.takeIf { threatHits }?.let { " " + SanRuFormatter.move(it.opponentMoveSan) }.orEmpty()
+        return "Уводит " + PieceLexicon.name(type, GrammaticalCase.ACCUSATIVE) + " с " + sq(from) + " из-под удара" + blow + "."
     }
 
     /** Ход, который хочется сыграть, и чем он хуже: сыгранный, а если он хорош, то ловушка. */
@@ -325,6 +375,44 @@ object TextRenderer {
     private const val TURNING_POINT_LOSS_CP = 100
     private const val MATE_ZONE_CP = 10_000
 
+    // ——— Группы: до хода, ход, после хода ———
+
+    /** Метка заголовка группы: экраны выделяют такие строки. */
+    const val GROUP_MARK = "━━"
+
+    /**
+     * Разбор читается как рассказ тренера, подсевшего к доске: что было до хода,
+     * что сыграно и что надо было, что стало после. План соперника идёт раньше
+     * своего: сначала понять, что он задумал.
+     */
+    private fun readingOrder(explanation: PositionExplanation, viewer: Side?): List<Section> {
+        val sections = explanation.sections
+        val opponentPlanFirst = viewer != null && viewer != explanation.sideToMove
+        if (!opponentPlanFirst) return sections
+        val myPosition = sections.indexOfFirst { it is Section.MyPosition }
+        val myAttack = sections.indexOfFirst { it is Section.MyAttack }
+        if (myPosition < 0 || myAttack < 0) return sections
+        return sections.toMutableList().also {
+            it[myPosition] = sections[myAttack]
+            it[myAttack] = sections[myPosition]
+        }
+    }
+
+    private fun groupOf(section: Section, explanation: PositionExplanation, viewer: Side?): String {
+        val played = explanation.playedMoveSan != null
+        return when (section) {
+            is Section.EvalReason, is Section.PositionAssessment, is Section.MyPosition, is Section.MyAttack ->
+                if (played) "ДО ХОДА" else "ПОЗИЦИЯ"
+            is Section.AfterMove -> "ПОСЛЕ ХОДА"
+            else -> when {
+                !played -> "ЧТО ИГРАТЬ"
+                viewer == null -> "ХОД " + SanRuFormatter.move(explanation.playedMoveSan ?: "")
+                viewer == explanation.sideToMove -> "ВАШ ХОД " + SanRuFormatter.move(explanation.playedMoveSan ?: "")
+                else -> "ХОД СОПЕРНИКА " + SanRuFormatter.move(explanation.playedMoveSan ?: "")
+            }
+        }
+    }
+
     // ——— Заголовки и тела разделов ———
 
     private fun titleOf(section: Section, explanation: PositionExplanation, viewer: Side?): String = when (section) {
@@ -342,6 +430,7 @@ object TextRenderer {
         is Section.Prophylaxis -> "ПРОФИЛАКТИКА"
         is Section.Trap -> "ЕСЛИ СЫГРАТЬ ИНАЧЕ"
         is Section.Alternatives -> "ДРУГИЕ ХОДЫ"
+        is Section.AfterMove -> "ПОСЛЕ ХОДА"
     }
 
     private fun planTitle(owner: Side, viewer: Side?): String = when (viewer) {
@@ -398,7 +487,7 @@ object TextRenderer {
         forkedSquares: Set<Square>,
     ): String? = when (section) {
         is Section.EvalReason -> evalReasonBody(section, glossary)
-        is Section.PositionAssessment -> positionAssessmentBody(section)
+        is Section.PositionAssessment -> positionAssessmentBody(section, explanation, glossary)
         is Section.MyPosition -> myPositionBody(section, explanation, pool, glossary, memory, forkedSquares)
         is Section.MyAttack -> myAttackBody(section, explanation, glossary, memory, forkedSquares)
         is Section.BestMoves -> bestMovesBody(section, glossary, memory, forkedSquares)
@@ -407,6 +496,15 @@ object TextRenderer {
         is Section.Prophylaxis -> prophylaxisBody(section.fact, pool)
         is Section.Trap -> trapBody(section, explanation.sideToMove)
         is Section.Alternatives -> alternativesBody(section)
+        is Section.AfterMove -> afterMoveBody(section, glossary)
+    }
+
+    /** "Оценка после хода Bxg5: −4.5." и почему — тем же разбором варианта, что и до хода. */
+    private fun afterMoveBody(section: Section.AfterMove, glossary: Glossary): String? {
+        val score = section.scoreFromWhite ?: return null
+        val head = "Оценка после хода " + SanRuFormatter.move(section.moveSan) + ": " + ScoreFormat.short(score) + "."
+        val reason = section.reason?.let { evalReasonBody(it, glossary, withMaterial = true) } ?: return head
+        return head + System.lineSeparator() + reason
     }
 
     // ——— ПОЧЕМУ ТАКАЯ ОЦЕНКА ———
@@ -415,7 +513,14 @@ object TextRenderer {
      * Отвечает своими фразами и своей памятью: факт, названный здесь, должен
      * прозвучать и в разделе ниже, а этот блок читают отдельно.
      */
-    private fun evalReasonBody(section: Section.EvalReason, glossary: Glossary): String {
+    private fun evalReasonBody(section: Section.EvalReason, glossary: Glossary, withMaterial: Boolean = true): String =
+        evalReasonParts(section, glossary)
+            .let { parts -> if (withMaterial) parts else parts.drop(1) }
+            .filter { it.isNotEmpty() }
+            .joinToString(" ")
+
+    /** Первая часть — материал сейчас: в блоке "до хода" его уже назвала строка выше. */
+    private fun evalReasonParts(section: Section.EvalReason, glossary: Glossary): List<String> {
         val leader = section.leader
         val line = { san: List<String> -> san.joinToString(" ") { SanRuFormatter.move(it) } }
 
@@ -425,14 +530,18 @@ object TextRenderer {
                 MatePattern.BACK_RANK -> " Рисунок: линейный мат по последней горизонтали."
                 null -> ""
             }
-            return capitalize(SideLexicon.name(leader)) + " ставят мат в " + section.mateIn + " " +
-                movesWord(section.mateIn) + ": " + line(section.lineSan) + "." + pattern
+            // Пустая первая часть — на месте материала: при мате о нём не говорим.
+            return listOf(
+                "",
+                capitalize(SideLexicon.name(leader)) + " ставят мат в " + section.mateIn + " " +
+                    movesWord(section.mateIn) + ": " + line(section.lineSan) + "." + pattern,
+            )
         }
 
         val parts = mutableListOf(materialNowSentence(section.materialNow))
         if (leader == null) {
             parts += "Перевеса нет: движок не видит ни выигрыша материала, ни решающего удара."
-            return parts.joinToString(" ")
+            return parts
         }
 
         val gain = materialGainWord(section.materialSwing ?: 0)
@@ -453,14 +562,14 @@ object TextRenderer {
         if (returned && lineMaterial != null) {
             parts += "В варианте " + line(section.swingLineSan) + " " + materialChangePhrase(lineMaterial)
         } else if (parts.size > 1) {
-            return parts.joinToString(" ")
+            return parts
         }
 
         val materialBase = if (returned && lineMaterial != null) lineMaterial else section.materialNow
         val materialAhead = if (leader == Side.WHITE) materialBase else -materialBase
         if (materialAhead >= MATERIAL_EXPLAINS_CP) {
             parts += "Перевес держится на этом материале."
-            return parts.joinToString(" ")
+            return parts
         }
 
         val positional = statementsFor(section.positional, emptySet(), glossary, RenderMemory(), MAX_FACTS_PER_REASON)
@@ -471,7 +580,7 @@ object TextRenderer {
             "Перевес у " + SideLexicon.name(leader, GrammaticalCase.GENITIVE) + " позиционный. " +
                 positional.joinToString(" ")
         }
-        return parts.joinToString(" ")
+        return parts
     }
 
     private fun materialChangePhrase(material: Int): String = when {
@@ -491,7 +600,8 @@ object TextRenderer {
         swing >= SeeCalculator.QUEEN_VALUE - GAIN_MARGIN_CP -> "ферзя"
         swing >= SeeCalculator.ROOK_VALUE - GAIN_MARGIN_CP -> "ладью"
         swing >= SeeCalculator.KNIGHT_VALUE - GAIN_MARGIN_CP -> "фигуру"
-        swing >= EXCHANGE_MIN_CP -> "качество"
+        // Не "качество": так же выглядит и слон за две пешки, а качество — это ладья за лёгкую фигуру.
+        swing >= EXCHANGE_MIN_CP -> "материал, около двух пешек"
         swing >= SeeCalculator.PAWN_VALUE - GAIN_MARGIN_CP / 2 -> "пешку"
         else -> null
     }
@@ -502,13 +612,27 @@ object TextRenderer {
 
     // ——— ОЦЕНКА ПОЗИЦИИ ———
 
-    private fun positionAssessmentBody(section: Section.PositionAssessment): String {
+    /**
+     * Блок "до хода": дебют, материал, характер позиции, оценка и почему она
+     * такая. Материал называется один раз — строкой с перечнем фигур.
+     */
+    private fun positionAssessmentBody(
+        section: Section.PositionAssessment,
+        explanation: PositionExplanation,
+        glossary: Glossary,
+    ): String {
         val lines = mutableListOf<String>()
         // Дебют первой строкой: он отвечает на вопрос "куда я вообще попал",
         // а материал и характер позиции — уже на "как тут дела".
         section.opening?.takeIf { it.isNotBlank() }?.let { lines += "Дебют: $it." }
         lines += materialAssessmentLine(section)
         characterLine(section.character)?.let { lines += it }
+        val score = explanation.scoreFromWhite
+        if (score != null) {
+            val label = if (explanation.playedMoveSan != null) "Оценка до хода: " else "Оценка: "
+            val why = explanation.section<Section.EvalReason>()?.let { evalReasonBody(it, glossary, withMaterial = false) }
+            lines += label + ScoreFormat.short(score) + "." + why?.takeIf { it.isNotEmpty() }?.let { " $it" }.orEmpty()
+        }
         return lines.joinToString(System.lineSeparator())
     }
 
@@ -638,7 +762,8 @@ object TextRenderer {
         val mover = explanation.sideToMove
 
         val (backRank, loose) = section.loosePieces.partition { it is BackRankFact }
-        return checkList(
+        val previous = section.previousMove?.let { previousMoveLine(it, forkedSquares, glossary) + System.lineSeparator() }.orEmpty()
+        return previous + checkList(
             mates = mateSentences(section.mates) +
                 statementsFor(backRank, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON) +
                 threatSentences.takeIf { threatIsMate && section.mates.isEmpty() }.orEmpty() +
@@ -652,6 +777,42 @@ object TextRenderer {
             exchanges = statementsFor(section.exchanges, forkedSquares, glossary, memory, MAX_EXCHANGES),
         ) + ideaLine(explanation.section<Section.PositionAssessment>()?.opponentDevelopmentPlan, emptyList())
     }
+
+    /**
+     * "Прошлый ход 6... g5: нападает на слона h4." Свою [RenderMemory] не берём:
+     * тот же удар потом стоит пунктом плана, и вычёркивать его там нельзя.
+     */
+    private fun previousMoveLine(previous: PreviousMove, forkedSquares: Set<Square>, glossary: Glossary): String {
+        val parts = mutableListOf<String>()
+        previous.captured?.let { parts += "взят" + takenEnding(it) + " " + PieceLexicon.name(it, GrammaticalCase.NOMINATIVE) }
+        if (previous.check) parts += "шах"
+        // Коротко, что ход сделал: подробности тот же факт получает ниже, в пунктах плана.
+        val ranked = previous.facts.sortedBy(::damageRank)
+        val short = ranked.mapNotNull(::previousPhrase).distinct().take(MAX_FACTS_PER_REASON)
+        parts += short.ifEmpty {
+            statementsFor(ranked, forkedSquares, glossary, RenderMemory(), MAX_FACTS_PER_REASON)
+                .map { decapitalize(it.removeSuffix(".")) }
+        }
+        val what = if (parts.isEmpty()) "новых ударов и угроз не создаёт" else parts.joinToString("; ")
+        return "Прошлый ход " + previous.moveNumberLabel + " " + SanRuFormatter.move(previous.san) + ": " + what + "."
+    }
+
+    /** Что сделал прошлый ход — глаголом: "нападает на слона h4". Null — короткой формы нет. */
+    private fun previousPhrase(fact: Fact): String? = when (fact) {
+        is HangingPieceFact -> "нападает на " + namedSquare(fact.evidence, fact.square, GrammaticalCase.ACCUSATIVE)
+        is ForkFact -> "ставит вилку на " + russianList(fact.targets.map { sq(it) })
+        is PinFact -> "связывает " + namedSquare(fact.evidence, fact.pinned, GrammaticalCase.ACCUSATIVE)
+        is SkewerFact -> "ставит рентген на " + sq(fact.front)
+        is DiscoveredAttackFact -> "готовит вскрытое нападение на " + sq(fact.target)
+        is MateFact -> "грозит матом"
+        is BackRankFact -> "грозит матом по последней горизонтали"
+        is TrappedPieceFact -> "запирает " + namedSquare(fact.evidence, fact.square, GrammaticalCase.ACCUSATIVE)
+        else -> null
+    }
+
+    /** "взят конь", "взята пешка": причастие по роду фигуры. */
+    private fun takenEnding(type: PieceType): String =
+        if (PieceLexicon.genderOf(type) == Gender.MASCULINE) "" else "а"
 
     private fun myAttackBody(
         section: Section.MyAttack,
@@ -831,12 +992,40 @@ object TextRenderer {
         val computer = "Компьютер: " + SanRuFormatter.line(section.computerLineSan) + "."
         val human = section.human ?: return computer
 
-        val why = statementsFor(human.facts, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON)
-            .ifEmpty { listOf("Ход заметен сразу и почти не уступает лучшему.") }
-        val loss = String.format(Locale.ROOT, "%.1f", human.lossVsBestCentipawns / 100.0)
-        return computer + System.lineSeparator() +
-            "Человек: " + SanRuFormatter.line(human.lineSan) + " (слабее лучшего на " + loss + "). " +
-            why.joinToString(" ")
+        // Отставание в развитии и голый король — приметы позиции, а не то, что делает ход.
+        val why = statementsFor(
+            human.facts.filterNot { it is DevelopmentFact || it is KingSafetyFact },
+            forkedSquares, glossary, memory, MAX_FACTS_PER_REASON,
+        )
+        // Ноль после округления — это не "слабее", а равноценный ход.
+        val loss = if (human.lossVsBestCentipawns < 5) {
+            "равноценно лучшему"
+        } else {
+            "слабее лучшего на " + String.format(Locale.ROOT, "%.1f", human.lossVsBestCentipawns / 100.0)
+        }
+        val humanSan = human.lineSan.firstOrNull()?.let { SanRuFormatter.move(it) }.orEmpty()
+        val computerSan = SanRuFormatter.move(section.computerLineSan.first())
+        return listOf(
+            computer,
+            "Человек: " + SanRuFormatter.line(human.lineSan) + " (" + loss + ").",
+            humanDifference(human, humanSan, computerSan) + why.joinToString(" ", prefix = " ").trimEnd(),
+        ).joinToString(System.lineSeparator())
+    }
+
+    /** Почему человеку проще другой ход: он заметнее, а компьютерный держится на расчёте. */
+    private fun humanDifference(human: HumanMove, humanSan: String, computerSan: String): String {
+        val natural = when (human.kind) {
+            NaturalMove.CAPTURE -> "$humanSan — взятие, его видно сразу"
+            NaturalMove.CHECK -> "$humanSan — шах, его видно сразу"
+            NaturalMove.DEVELOPMENT -> "$humanSan развивает фигуру по дебютному правилу"
+            NaturalMove.OTHER -> "$humanSan проще найти"
+        }
+        val computer = if (human.computerQuiet) {
+            "тихий $computerSan компьютер выбирает по расчёту на несколько ходов вперёд"
+        } else {
+            "$computerSan компьютер ставит выше по расчёту"
+        }
+        return "Разница: " + natural + ", а " + computer + "."
     }
 
     private fun whyThisMoveBody(
@@ -850,7 +1039,8 @@ object TextRenderer {
         val captured = capturedPhrase(explanation)
             ?.takeIf { section.moveSan == explanation.bestMoveSan }
             ?.let { capitalize(it) + "." }
-        val lines = listOfNotNull(captured) +
+        val escape = escapePhrase(explanation)?.takeIf { section.moveSan == explanation.bestMoveSan && captured == null }
+        val lines = listOfNotNull(escape, captured) +
             section.reasons.mapNotNull { reasonSentence(it, glossary, memory, forkedSquares) }
         if (lines.isEmpty() && !section.pointIsInTheLine) return null
 
@@ -950,7 +1140,8 @@ object TextRenderer {
         subject: String,
     ): String = listOfNotNull(
         moveScoresLine(section),
-        section.lineSan.takeIf { it.size >= 2 }?.let { "Вариант: " + SanRuFormatter.line(it) + "." },
+        // Сам ход уже назван в заголовке: вариант начинается с ответа на него.
+        section.lineSan.takeIf { it.size >= 2 }?.let { "Вариант после хода: " + SanRuFormatter.line(it.drop(1)) + "." },
         moveReasonLine(section, mover),
         comparisonBody(section, betterPrefix, subject),
     ).joinToString(System.lineSeparator())
@@ -1249,7 +1440,7 @@ object TextRenderer {
     /** Все факты разбора разом — чтобы вилка поглощала свои цели по всему тексту, а не только в своём пункте. */
     private fun collectAllFacts(explanation: PositionExplanation): List<Fact> = explanation.sections.flatMap { section ->
         when (section) {
-            is Section.EvalReason, is Section.PositionAssessment -> emptyList()
+            is Section.EvalReason, is Section.PositionAssessment, is Section.AfterMove -> emptyList()
             is Section.MyPosition ->
                 section.kingSafety + section.loosePieces + section.exchanges + section.advice.map { it.fact } +
                     section.opponentPlan.flatMap { it.facts } +
@@ -1351,7 +1542,8 @@ object TextRenderer {
         is TrappedPieceFact -> {
             val gender = PieceLexicon.genderOf(pieceTypeOf(fact.piece))
             val name = capitalize(PieceLexicon.name(pieceTypeOf(fact.piece)))
-            "$name на ${sq(fact.square)} ${PieceLexicon.Agreements.TRAPPED.agree(gender)} — любой её ход теряет материал."
+            val its = if (gender == Gender.MASCULINE) "его" else "её"
+            "$name на ${sq(fact.square)} ${PieceLexicon.Agreements.TRAPPED.agree(gender)} — любой $its ход теряет материал."
         }
 
         is ForkFact -> {
@@ -1546,16 +1738,63 @@ object TextRenderer {
 
     /** "Nxf5 Qxf5: конь за слона, материал +0.1 в пользу белых." */
     private fun exchangeStatement(fact: ExchangeFact): String {
-        val line = SanRuFormatter.line(fact.lineSan)
+        val forced = fact.lineSan.take(fact.forcedPlies)
+        val line = SanRuFormatter.line(forced)
         val attacker = fact.evidence.pieceAt(fact.attacker)
         val victim = fact.evidence.pieceAt(fact.square)
-        val swap = if (fact.lineSan.size == 2 && attacker != null && victim != null) {
+        val swap = if (forced.size == 2 && attacker != null && victim != null) {
             PieceLexicon.name(pieceTypeOf(attacker)) + " за " +
                 PieceLexicon.name(pieceTypeOf(victim), GrammaticalCase.ACCUSATIVE) + ", "
         } else {
             ""
         }
-        return "$line: $swap" + materialBalance(fact.deltaCentipawns, fact.favours) + "."
+        return "$line: $swap" + materialBalance(fact.deltaCentipawns, fact.favours) + "." + optionalExchange(fact)
+    }
+
+    /**
+     * Равное продолжение размена: "Дальше можно разменять и коней: Nxd4 Qxd4".
+     * Обязательную часть оно не меняет, поэтому идёт отдельной фразой, а если
+     * движок от него отказывается, так и говорим.
+     */
+    private fun optionalExchange(fact: ExchangeFact): String {
+        val optional = fact.lineSan.drop(fact.forcedPlies)
+        if (optional.isEmpty()) return ""
+        val victim = sanPieceType(fact.lineSan[fact.forcedPlies - 1])
+        val taker = sanPieceType(optional.first())
+        val what = if (victim == taker) {
+            "разменять и " + tradedPlural(victim)
+        } else {
+            "продолжить: " + PieceLexicon.name(taker) + " за " + PieceLexicon.name(victim, GrammaticalCase.ACCUSATIVE)
+        }
+        val engine = fact.engineChoiceSan?.let { ", но движок предпочитает " + SanRuFormatter.move(it) }.orEmpty()
+        return " Дальше можно $what: " + SanRuFormatter.line(optional) + engine + "."
+    }
+
+    /** "разменять и коней": фигуры во множественном числе после "разменять". */
+    private fun tradedPlural(type: PieceType): String = when (type) {
+        PieceType.KNIGHT -> "коней"
+        PieceType.BISHOP -> "слонов"
+        PieceType.ROOK -> "ладьи"
+        PieceType.QUEEN -> "ферзей"
+        else -> "пешки"
+    }
+
+    private fun pluralNominative(type: PieceType): String = when (type) {
+        PieceType.KNIGHT -> "кони"
+        PieceType.BISHOP -> "слоны"
+        PieceType.ROOK -> "ладьи"
+        PieceType.QUEEN -> "ферзи"
+        else -> "пешки"
+    }
+
+    /** Какой фигурой сделан ход: по первой букве записи SAN, строчная — пешка. */
+    private fun sanPieceType(san: String): PieceType = when (san.firstOrNull()) {
+        'N' -> PieceType.KNIGHT
+        'B' -> PieceType.BISHOP
+        'R' -> PieceType.ROOK
+        'Q' -> PieceType.QUEEN
+        'K' -> PieceType.KING
+        else -> PieceType.PAWN
     }
 
     /** Разница в материале с названной стороной: само число не говорит, за кого оно. */
@@ -1624,6 +1863,16 @@ object TextRenderer {
         val reply = line.getOrNull(2)?.let { SanRuFormatter.move(it) }
             ?: return "взять обратно $recapture можно, но это размен в минус"
         val piece = fact.recapturer?.pieceType ?: return "если взять обратно $recapture, то $reply"
+        // Взявший обратно гибнет, но и сам забрал фигуру той же цены: это размен,
+        // а потеряна только исходная фигура. "Конь потерян" после Nxd4 Nxd4 Qxd4 — неправда.
+        val attackerType = fact.firstAttacker?.let { fact.evidence.pieceAt(it) }?.pieceType
+        if (attackerType != null && SeeCalculator.value(attackerType) == SeeCalculator.value(piece)) {
+            val traded = if (attackerType == piece) pluralNominative(piece) + " меняются" else "фигуры меняются"
+            val victim = fact.piece.pieceType ?: return "если взять обратно $recapture, то $reply: $traded"
+            val lostVictim = if (PieceLexicon.genderOf(victim) == Gender.MASCULINE) "потерян" else "потеряна"
+            return "если взять обратно $recapture, то $reply: $traded, а " + PieceLexicon.name(victim) +
+                " всё равно " + lostVictim
+        }
         val lost = if (PieceLexicon.genderOf(piece) == Gender.MASCULINE) "потерян" else "потеряна"
         return "если взять обратно $recapture, то $reply и " + PieceLexicon.name(piece) + " " + lost
     }

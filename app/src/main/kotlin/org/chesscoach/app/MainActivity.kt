@@ -8,7 +8,11 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -45,11 +49,15 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             AppTheme {
+                // Окно рисуется под системными панелями: отступы от часов сверху и
+                // от кнопок навигации снизу задаются здесь один раз для всех экранов.
                 Surface(modifier = Modifier.fillMaxSize()) {
+                    Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
                     AppRoot(
                         redirect = redirect,
                         onRedirectHandled = { redirect = null },
                     )
+                    }
                 }
             }
         }

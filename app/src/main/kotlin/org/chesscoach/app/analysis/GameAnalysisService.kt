@@ -17,6 +17,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.chesscoach.app.AppContainer
 import org.chesscoach.core.GameReplay
 import org.chesscoach.core.GameSummary
@@ -36,6 +38,7 @@ class GameAnalysisService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val activeScans = AtomicInteger(0)
+    private val queue = Mutex()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -64,7 +67,9 @@ class GameAnalysisService : Service() {
         // только последний из них, иначе короткая партия оборвала бы длинную.
         activeScans.incrementAndGet()
         scope.launch {
-            runAnalysis(gameId, movesSan, initialFen)
+            // По одной партии за раз: «Разобрать 46 партий» ставит их в очередь,
+            // а не запускает 46 сканов на одном движке сразу.
+            queue.withLock { runAnalysis(gameId, movesSan, initialFen) }
             if (activeScans.decrementAndGet() == 0) stopSelf()
         }
 

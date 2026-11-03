@@ -107,11 +107,30 @@ data class DevelopmentPlan(
 data class CheckedAdvice(val fact: Fact, val scoreFromWhite: Score? = null)
 
 /** Ход, заметный уже при малой глубине расчёта и почти не уступающий лучшему. */
+/**
+ * Прошлый ход соперника и что он дал: взятие, шах, новые удары и угрозы.
+ * Тренер, подсевший к доске, начинает с вопроса "зачем он так сыграл".
+ */
+data class PreviousMove(
+    val san: String,
+    val moveNumberLabel: String,
+    val captured: com.github.bhlangonijr.chesslib.PieceType?,
+    val check: Boolean,
+    val facts: List<Fact>,
+)
+
 data class HumanMove(
     val lineSan: List<String>,
     val lossVsBestCentipawns: Int,
     val facts: List<Fact>,
+    /** Чем ход естественен: по этому объясняется, почему он проще компьютерного. */
+    val kind: NaturalMove = NaturalMove.OTHER,
+    /** Ход компьютера тихий: не берёт, не шахует и не развивает фигуру. */
+    val computerQuiet: Boolean = false,
 )
+
+/** Что делает ход, который человек находит сразу. Порядок — от самого заметного. */
+enum class NaturalMove { CAPTURE, CHECK, DEVELOPMENT, OTHER }
 
 /**
  * Разделы разбора. Раздел, для которого не хватило доказательств, просто
@@ -174,6 +193,20 @@ sealed interface Section {
         val advice: List<CheckedAdvice> = emptyList(),
         /** Маты соперника в один ход, будь ход его, записью SAN. */
         val mates: List<String> = emptyList(),
+        /** Зачем соперник сделал свой прошлый ход. Null — прошлый ход неизвестен. */
+        val previousMove: PreviousMove? = null,
+    ) : Section
+
+    /**
+     * После хода: оценка позиции, которая на доске, и почему она такая.
+     *
+     * Разбор до хода объясняет прежнюю оценку, а полоска рядом с доской
+     * показывает уже новую. Без этого раздела −4.5 на полоске не объяснено ничем.
+     */
+    data class AfterMove(
+        val moveSan: String,
+        val scoreFromWhite: Score?,
+        val reason: EvalReason?,
     ) : Section
 
     /** Моя атака: чем я могу наказать соперника, и к чему веду дело. */

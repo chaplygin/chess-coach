@@ -90,7 +90,16 @@ class DiscoveredAttackDetector : Detector {
             val after = working.clone()
             after.doMove(move)
             val opened = RayUtil.slidingAttacks(sliderType, square, after.getBitboard()) and target.bitboard != 0L
-            opened && (targetIsKing || winsMaterial(after, target, side, gainBefore))
+            // Линия обоюдная: цель бьёт дальнобойщика по той же линии, а ход уже у
+            // соперника. Ферзь d8 против слона h4 после ухода коня f6 первым теряет
+            // сам: Bxd8. Выручает только шах, на который соперник обязан ответить.
+            val hitsBack = !targetIsKing && AttackMap.attacksFrom(after, target) and square.bitboard != 0L &&
+                (
+                    SeeCalculator.value(board.getPiece(target).pieceType) <= SeeCalculator.value(sliderType) ||
+                        !AttackMap.isAttacked(after, square, side)
+                    )
+            opened && (targetIsKing || winsMaterial(after, target, side, gainBefore)) &&
+                (!hitsBack || after.isKingAttacked)
         }
     }
 

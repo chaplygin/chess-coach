@@ -200,3 +200,32 @@ button.wide { width: 100%; margin: 12px 0; }
 .card .coach { border: 0; padding: 0; min-height: 0; background: transparent; }
 .user-line .variation { margin: 6px 0; }
 .user-line .eval { font-size: 12px; color: var(--muted); }
+
+/* Отступы от выреза камеры и полосы жестов на телефоне. */
+main {
+  padding-left: max(16px, env(safe-area-inset-left));
+  padding-right: max(16px, env(safe-area-inset-right));
+  padding-bottom: max(16px, env(safe-area-inset-bottom));
+}
+
+/* Заголовки групп разбора: до хода, ход, после хода. */
+.coach .group-title { display: inline-block; margin-top: 4px; color: var(--accent); letter-spacing: 0.02em; }
+
+/* Продолжение лучшей линии под доской. */
+.continuation { margin: 6px 0; }
+.continuation label { display: inline-flex; align-items: center; gap: 4px; margin-right: 6px; }
+
+/* Мои ошибки. */
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 4px; }
+.chips button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.main-error { display: flex; flex-direction: column; gap: 8px; background: var(--accent); color: #fff; }
+.main-error .label { font-size: 13px; opacity: 0.8; letter-spacing: 0.04em; }
+.main-error strong { font-size: 22px; line-height: 1.25; }
+.main-error .example-main { text-align: left; background: rgba(255, 255, 255, 0.18); color: #fff; border: 0; border-radius: 10px; font-weight: 600; }
+.counters .counter { display: flex; flex-direction: column; align-items: center; font-size: 13px; color: var(--muted); }
+.counters .counter b { font-size: 28px; color: var(--text); }
+.counters .counter.bad b { color: #ff3b30; }
+.counters .counter.warn b { color: #ff9500; }
+.kind .bar { height: 6px; border-radius: 3px; background: var(--line); margin: 8px 0; overflow: hidden; }
+.kind .bar i { display: block; height: 100%; background: var(--accent); }
+.kind .examples .menu-row { padding-left: 0; padding-right: 0; }

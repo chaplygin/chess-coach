@@ -37,6 +37,8 @@ import org.chesscoach.coach.model.OverloadedDefenderFact
 import org.chesscoach.coach.model.PassedPawnFact
 import org.chesscoach.coach.model.PinFact
 import org.chesscoach.coach.model.PositionExplanation
+import org.chesscoach.coach.model.PreviousMove
+import org.chesscoach.coach.model.NaturalMove
 import org.chesscoach.coach.model.Section
 import org.chesscoach.coach.model.SkewerFact
 import org.chesscoach.coach.model.ThreatFact
@@ -79,15 +81,27 @@ class PipelineOrchestrator(
         /** С этой потери ход не называем советом: разница больше неточности. */
         const val ADVICE_MAX_LOSS_CP = 50
 
+        /** Потеря к концу варианта, при которой пойманная фигура действительно теряется. */
+        const val TRAPPED_LOSS_CP = 200
+
+        /** Сколько полуходов лучшей линии смотреть, ища шах королю. */
+        const val KING_TALK_PLIES = 5
+
         const val MAX_TEMPTING_CAPTURES = 2
         const val TEMPTING_LINE_INDEX = 99
         val ADVICE_LIMITS = CoachSearchLimits(movetimeMs = 250, multiPv = 1)
     }
 
+    /**
+     * [previousFen] и [previousMoveUci] — прошлый ход соперника, если он известен:
+     * разбор начинается с того, зачем соперник так сыграл.
+     */
     suspend fun explain(
         fen: String,
         playedMoveUci: String? = null,
         opening: String? = null,
+        previousFen: String? = null,
+        previousMoveUci: String? = null,
     ): PositionExplanation {
         val sideToMove = NullMoveUtil.sideToMoveOf(fen)
         val featuresBefore = featureSource.features(fen)
@@ -114,7 +128,8 @@ class PipelineOrchestrator(
         // поэтому идёт в списке раньше конкретного хода.
         bestLine?.let { lineAnalyzer.analyse(fen, it) }?.let { sections += it }
         sections += PositionAssessor.assess(fen, featuresBefore, sideToMove, opening)
-        sections += myPositionSection(fen, featuresBefore, sideToMove, threat, opponentAdvice(fen, featuresBefore, sideToMove))
+        val previous = previousMove(previousFen, previousMoveUci, fen, featuresBefore, sideToMove)
+        sections += myPositionSection(fen, featuresBefore, sideToMove, threat, opponentAdvice(fen, featuresBefore, sideToMove), previous)
         sections += myAttackSection(fen, featuresBefore, sideToMove, ownAdvice(fen, featuresBefore, sideToMove, bestLine), bestLine)
 
         // 4. Почему лучший ход хорош, профилактика и разбор сыгранного хода
@@ -123,6 +138,7 @@ class PipelineOrchestrator(
         if (bestLine != null && bestMoveUci != null) {
             val bestDiff = reasonDiffAnalyzer.analyse(fen, bestMoveUci, bestLine.score)
             withMateFirst(bestDiff.whyThisMove, bestMoveSan, bestLine, sideToMove)
+                ?.let { withoutIdleKingTalk(it, fen, bestLine) }
                 ?.let {
                     it.copy(
                         pointIsInTheLine = pointIsInTheLine(it, bestLine, mainLines),
@@ -175,13 +191,18 @@ class PipelineOrchestrator(
                         mainLines,
                         playedDiff.moveScoreFromMover,
                     )
+                    val swing = LineMaterial.swing(fen, playedLine, sideToMove)
                     sections += Section.PlayedMove(
                         scoreAfterFromWhite = playedScore?.let { ScoreFormat.toWhitePerspective(it, sideToMove) },
                         bestScoreFromWhite = scoreFromWhite,
                         lineSan = MoveNotation.uciToSanOrRaw(fen, playedLine),
                         lineUci = playedLine,
-                        materialSwing = LineMaterial.swing(fen, playedLine, sideToMove),
-                        lineGains = lineGains(fen, playedLine, sideToMove),
+                        materialSwing = swing,
+                        // "Конь пойман" к концу варианта — только если вариант и правда
+                        // отнимает фигуру. Иначе конь просто стоит пассивно.
+                        lineGains = lineGains(fen, playedLine, sideToMove).filter {
+                            it !is TrappedPieceFact || (swing ?: 0) <= -TRAPPED_LOSS_CP
+                        },
                         playedSan = playedSan,
                         playedUci = playedMoveUci,
                         bestSan = bestMoveSan,
@@ -196,6 +217,7 @@ class PipelineOrchestrator(
                         refutationSan = playedDiff.replyMoveSan.takeIf { playedMoveUci != bestMoveUci },
                         punishment = if (playedMoveUci == bestMoveUci) emptyList() else playedDiff.opponentGains,
                     )
+                    afterMoveSection(fen, playedSan, playedPv, playedScore, sideToMove)?.let { sections += it }
                 }
             }
 
@@ -261,6 +283,7 @@ class PipelineOrchestrator(
         mover: Side,
         threat: ThreatFact?,
         advice: List<CheckedAdvice>,
+        previous: PreviousMove?,
     ): Section {
         val opponent = mover.flip()
         val kingSafety = features.pick<KingSafetyFact>().filter { it.kingSide == mover } +
@@ -280,7 +303,75 @@ class PipelineOrchestrator(
             checks = SafeChecks.of(fen, mover.flip()),
             advice = advice,
             mates = MatingMoves.of(fen, mover.flip()),
+            previousMove = previous,
         )
+    }
+
+    /**
+     * Зачем соперник сделал прошлый ход: что он взял, шах ли это и какие удары
+     * и угрозы появились у него после хода, которых не было до. Только
+     * детекторы, без движка: ответ на вопрос "что он задумал" виден на доске.
+     */
+    private fun previousMove(
+        previousFen: String?,
+        previousUci: String?,
+        fen: String,
+        features: FeatureSet,
+        mover: Side,
+    ): PreviousMove? {
+        if (previousFen == null || previousUci == null) return null
+        val opponent = mover.flip()
+        val before = Board()
+        if (!runCatching { before.loadFromFen(previousFen) }.isSuccess) return null
+        val move = runCatching { Move(previousUci, opponent) }.getOrNull() ?: return null
+        val captured = before.getPiece(move.to).takeIf { it != Piece.NONE }?.pieceType
+            ?: if (before.getPiece(move.from).pieceType == com.github.bhlangonijr.chesslib.PieceType.PAWN &&
+                move.from.file != move.to.file
+            ) {
+                com.github.bhlangonijr.chesslib.PieceType.PAWN
+            } else {
+                null
+            }
+        val after = Board()
+        if (!runCatching { after.loadFromFen(fen) }.isSuccess) return null
+
+        val known = featureSource.features(previousFen).favouring(opponent).map(::signature).toSet()
+        val fresh = features.favouring(opponent).filter { fact ->
+            signature(fact) !in known && (
+                fact is HangingPieceFact || fact is ForkFact || fact is PinFact || fact is SkewerFact ||
+                    fact is DiscoveredAttackFact || fact is BackRankFact || fact is MateFact ||
+                    fact is TrappedPieceFact || fact is ForkThreatFact || fact is OutpostFact ||
+                    fact is OpenFileRookFact || fact is PassedPawnFact || fact is KingSafetyFact
+                )
+        }
+        return PreviousMove(
+            san = MoveNotation.uciToSanOrRaw(previousFen, listOf(previousUci)).first(),
+            moveNumberLabel = MoveNotation.fullMoveNumber(previousFen).toString() +
+                if (opponent == Side.WHITE) "." else "...",
+            captured = captured,
+            check = after.isKingAttacked,
+            facts = fresh,
+        )
+    }
+
+    /**
+     * ПОСЛЕ ХОДА: оценка позиции на доске и почему она такая — тот же разбор
+     * варианта, что и до хода, но из позиции после сыгранного хода.
+     */
+    private suspend fun afterMoveSection(
+        fen: String,
+        playedSan: String,
+        playedPv: List<String>,
+        playedScore: Score?,
+        mover: Side,
+    ): Section.AfterMove? {
+        val first = playedPv.firstOrNull() ?: return null
+        val afterFen = applyUciMove(fen, first) ?: return null
+        val score = playedScore ?: return Section.AfterMove(playedSan, null, null)
+        // Вариант после хода — с очередью соперника, поэтому и счёт с его стороны.
+        val line = EngineLine(multiPvIndex = 1, score = ScoreFormat.negate(score), pv = playedPv.drop(1), depth = 0)
+        val reason = if (line.pv.isEmpty() && score !is Score.Mate) null else lineAnalyzer.analyse(afterFen, line)
+        return Section.AfterMove(playedSan, ScoreFormat.toWhitePerspective(score, mover), reason)
     }
 
     /** МОЯ АТАКА: чем можно наказать соперника — те же факты, но на пользу мне, и к чему я веду дело. */
@@ -313,11 +404,25 @@ class PipelineOrchestrator(
             captures = captures,
             activity = activity,
             plan = PlanBuilder.build(features, mover),
-            exchanges = mine.filterIsInstance<ExchangeFact>(),
+            exchanges = mine.filterIsInstance<ExchangeFact>().map { withEngineChoice(fen, it, bestLine) },
             checks = SafeChecks.of(fen, mover),
             advice = advice,
             mates = matesInOne,
         )
+    }
+
+    /**
+     * Свой размен с равным продолжением: если лучшая линия движка играет
+     * обязательную часть, а дальше вместо равного взятия делает другой ход,
+     * этот ход и называем — "движок предпочитает Be7".
+     */
+    private fun withEngineChoice(fen: String, fact: ExchangeFact, bestLine: EngineLine?): ExchangeFact {
+        val forced = fact.forcedPlies
+        if (bestLine == null || fact.lineSan.size <= forced || bestLine.pv.size <= forced) return fact
+        val engineSan = MoveNotation.uciToSanOrRaw(fen, bestLine.pv.take(forced + 1))
+        if (engineSan.take(forced) != fact.lineSan.take(forced)) return fact
+        val choice = engineSan.getOrNull(forced) ?: return fact
+        return if (choice == fact.lineSan[forced]) fact else fact.copy(engineChoiceSan = choice)
     }
 
     /**
@@ -338,6 +443,20 @@ class PipelineOrchestrator(
         }
         val reasons = listOf(Reason(ReasonTier.MATERIAL_TACTICS, listOf(mate))) + rest
         return why?.copy(reasons = reasons, pointIsInTheLine = false) ?: Section.WhyThisMove(bestMoveSan, reasons)
+    }
+
+    /**
+     * "Король белых на e1 под давлением" в причинах хода — только если лучшая
+     * линия и правда идёт на короля: шахует в первых ходах. Иначе это примета
+     * позиции, а не то, ради чего ход сделан. Пустой список причин — без раздела.
+     */
+    private fun withoutIdleKingTalk(why: Section.WhyThisMove, fen: String, bestLine: EngineLine): Section.WhyThisMove? {
+        val attacksKing = MoveNotation.uciToSanOrRaw(fen, bestLine.pv.take(KING_TALK_PLIES)).any { it.contains('+') || it.contains('#') }
+        if (attacksKing) return why
+        val reasons = why.reasons.mapNotNull { reason ->
+            reason.facts.filterNot { it is KingSafetyFact }.takeIf { it.isNotEmpty() }?.let { Reason(reason.tier, it) }
+        }
+        return why.copy(reasons = reasons)
     }
 
     /** Мат за [mover], если лучшая линия движка его находит. */
@@ -476,18 +595,49 @@ class PipelineOrchestrator(
         quickLines: List<EngineLine>,
     ): HumanMove? {
         val bestUci = bestLine.pv.firstOrNull() ?: return null
-        val quickFirst = quickLines.sortedBy { it.multiPvIndex }.firstOrNull()?.pv?.firstOrNull() ?: return null
-        if (quickFirst == bestUci) return null
-        val line = mainLines.firstOrNull { it.pv.firstOrNull() == quickFirst } ?: return null
+        val bestKind = naturalKind(fen, bestUci)
+        // Почти равные лучшему ходы, самый заметный первым: взятие, шах, развитие.
+        // Если сам ход компьютера такой же заметный, человеку искать другой незачем.
+        val close = mainLines
+            .filter { it.pv.firstOrNull() != null && it.pv.first() != bestUci }
+            .distinctBy { it.pv.first() }
+            .filter { ScoreFormat.centipawnLoss(bestLine.score, it.score) <= CoachThresholds.HUMAN_MOVE_MAX_LOSS_CP }
+        val natural = close
+            .map { it to naturalKind(fen, it.pv.first()) }
+            .filter { (_, kind) -> kind.ordinal < bestKind.ordinal }
+            .minWithOrNull(compareBy({ it.second.ordinal }, { ScoreFormat.centipawnLoss(bestLine.score, it.first.score) }))
+        val quickFirst = quickLines.sortedBy { it.multiPvIndex }.firstOrNull()?.pv?.firstOrNull()
+        val (line, kind) = natural
+            ?: close.firstOrNull { it.pv.first() == quickFirst }?.let { it to naturalKind(fen, it.pv.first()) }
+            ?: return null
+        val uci = line.pv.first()
         val loss = ScoreFormat.centipawnLoss(bestLine.score, line.score)
-        if (loss > CoachThresholds.HUMAN_MOVE_MAX_LOSS_CP) return null
 
-        val diff = reasonDiffAnalyzer.analyse(fen, quickFirst, bestLine.score)
+        val diff = reasonDiffAnalyzer.analyse(fen, uci, bestLine.score)
         return HumanMove(
             lineSan = MoveNotation.uciToSanOrRaw(fen, line.pv.take(LINE_PLIES)),
             lossVsBestCentipawns = loss,
             facts = diff.whyThisMove?.reasons?.flatMap { it.facts } ?: emptyList(),
+            kind = kind,
+            computerQuiet = bestKind == NaturalMove.OTHER,
         )
+    }
+
+    /** Чем ход бросается в глаза: взятие, шах, вывод лёгкой фигуры с первой горизонтали. */
+    private fun naturalKind(fen: String, uci: String): NaturalMove {
+        val board = Board()
+        if (!runCatching { board.loadFromFen(fen) }.isSuccess) return NaturalMove.OTHER
+        val mover = board.sideToMove
+        val move = runCatching { Move(uci, mover) }.getOrNull() ?: return NaturalMove.OTHER
+        val piece = board.getPiece(move.from)
+        if (board.getPiece(move.to) != Piece.NONE) return NaturalMove.CAPTURE
+        val after = applyUciMove(fen, uci)?.let { f -> Board().also { it.loadFromFen(f) } }
+        if (after?.isKingAttacked == true) return NaturalMove.CHECK
+        val homeRank = if (mover == Side.WHITE) com.github.bhlangonijr.chesslib.Rank.RANK_1 else com.github.bhlangonijr.chesslib.Rank.RANK_8
+        val minor = piece.pieceType == com.github.bhlangonijr.chesslib.PieceType.KNIGHT ||
+            piece.pieceType == com.github.bhlangonijr.chesslib.PieceType.BISHOP
+        if (minor && move.from.rank == homeRank) return NaturalMove.DEVELOPMENT
+        return NaturalMove.OTHER
     }
 
     private data class PlayedMoveEvaluation(val classification: MoveClassification, val centipawnLoss: Int)
@@ -573,6 +723,7 @@ class PipelineOrchestrator(
         is Section.Prophylaxis -> 6
         is Section.Trap -> 7
         is Section.Alternatives -> 8
+        is Section.AfterMove -> 9
     }
 
     private fun alternativesSection(

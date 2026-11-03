@@ -43,10 +43,12 @@ class LichessApi internal constructor(
      * Ответ приходит в формате ndjson — по одной партии на строку, — поэтому
      * разбирается построчно: так одна испорченная запись не роняет весь список.
      */
-    suspend fun recentGames(username: String, max: Int = 50): List<GameSummary> =
+    /** [sinceEpochMs] — только партии не старше этого момента: окно анализа ошибок. */
+    suspend fun recentGames(username: String, max: Int = 50, sinceEpochMs: Long? = null): List<GameSummary> =
         withContext(Dispatchers.IO) {
             val url = "${LichessEndpoints.API_BASE}/api/games/user/$username" +
-                "?max=$max&moves=true&opening=true&clocks=true&sort=dateDesc"
+                "?max=$max&moves=true&opening=true&clocks=true&sort=dateDesc" +
+                (sinceEpochMs?.let { "&since=$it" } ?: "")
 
             val body = get(url, accept = "application/x-ndjson")
 

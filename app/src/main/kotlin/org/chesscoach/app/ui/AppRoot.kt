@@ -11,7 +11,7 @@ import androidx.compose.ui.platform.LocalContext
 import org.chesscoach.app.AppContainer
 import org.chesscoach.core.GameSummary
 
-enum class Screen { LOGIN, MENU, GAMES, PHOTO, RECAP, REVIEW, ENGINE, LIVE, SETTINGS }
+enum class Screen { LOGIN, MENU, GAMES, ERRORS, PHOTO, RECAP, REVIEW, ENGINE, LIVE, SETTINGS }
 
 @Composable
 fun AppRoot(redirect: Uri?, onRedirectHandled: () -> Unit) {
@@ -25,7 +25,8 @@ fun AppRoot(redirect: Uri?, onRedirectHandled: () -> Unit) {
     var completingLogin by remember { mutableStateOf(false) }
     var selectedGame by remember { mutableStateOf<GameSummary?>(null) }
     var reviewPly by remember { mutableStateOf(-1) }
-    var openReport by remember { mutableStateOf(false) }
+    /** Откуда пришли в разбор: из примера в «Моих ошибках» назад ведёт туда же. */
+    var reviewBack by remember { mutableStateOf(Screen.RECAP) }
 
     LaunchedEffect(redirect) {
         val uri = redirect ?: return@LaunchedEffect
@@ -61,14 +62,8 @@ fun AppRoot(redirect: Uri?, onRedirectHandled: () -> Unit) {
 
         Screen.MENU -> MainMenuScreen(
             container = container,
-            onOpenGames = {
-                openReport = false
-                screen = Screen.GAMES
-            },
-            onOpenReport = {
-                openReport = true
-                screen = Screen.GAMES
-            },
+            onOpenGames = { screen = Screen.GAMES },
+            onOpenReport = { screen = Screen.ERRORS },
             onOpenGame = { game ->
                 selectedGame = game
                 screen = Screen.RECAP
@@ -80,11 +75,22 @@ fun AppRoot(redirect: Uri?, onRedirectHandled: () -> Unit) {
 
         Screen.GAMES -> GameListScreen(
             container = container,
-            openReport = openReport,
             onBack = { screen = Screen.MENU },
+            onOpenErrors = { screen = Screen.ERRORS },
             onOpenGame = { game ->
                 selectedGame = game
                 screen = Screen.RECAP
+            },
+        )
+
+        Screen.ERRORS -> ErrorsScreen(
+            container = container,
+            onBack = { screen = Screen.MENU },
+            onOpenExample = { game, ply ->
+                selectedGame = game
+                reviewPly = ply
+                reviewBack = Screen.ERRORS
+                screen = Screen.REVIEW
             },
         )
 
@@ -104,6 +110,7 @@ fun AppRoot(redirect: Uri?, onRedirectHandled: () -> Unit) {
                     onBack = { screen = Screen.GAMES },
                     onOpenMove = { ply ->
                         reviewPly = ply
+                        reviewBack = Screen.RECAP
                         screen = Screen.REVIEW
                     },
                 )
@@ -119,7 +126,7 @@ fun AppRoot(redirect: Uri?, onRedirectHandled: () -> Unit) {
                     container = container,
                     game = game,
                     initialPly = reviewPly,
-                    onBack = { screen = Screen.RECAP },
+                    onBack = { screen = reviewBack },
                 )
             }
         }

@@ -32,13 +32,15 @@ class ExchangeDetector : Detector {
             val delta = SeeCalculator.firstCaptureDelta(board, square, attacker) ?: continue
             if (abs(delta) >= SeeCalculator.WINNING_MIN_CP) continue
 
+            val line = SeeCalculator.fullExchangeLine(board, square, attacker)
             facts += ExchangeFact(
                 square = square,
                 attacker = first.from,
                 deltaCentipawns = delta,
                 favours = attacker,
                 evidence = Evidence.onBoard(board, square, first.from),
-                lineSan = SeeCalculator.exchangeLineSan(board, square, attacker),
+                lineSan = line.san,
+                forcedPlies = line.forcedPlies,
             )
         }
 

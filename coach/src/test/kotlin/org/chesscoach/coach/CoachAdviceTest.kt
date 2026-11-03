@@ -121,7 +121,7 @@ class CoachAdviceTest {
         )
         val result = CoachEngine(engine).tryCandidate(queenPosition, "d4") as CandidateResult.Explained
         assertTrue(result.text, result.text.contains("Оценка после хода: +2.3. После лучшего e4: +0.2."))
-        assertTrue(result.text, result.text.contains("Вариант: d4 exd4 exd4 Nd5."))
+        assertTrue(result.text, result.text.contains("Вариант после хода: exd4 exd4 Nd5."))
         assertTrue(result.text, result.text.contains("Почему:"))
         assertFalse(result.text, result.text.contains("Вопрос на будущее"))
         assertNotNull(result.variation)

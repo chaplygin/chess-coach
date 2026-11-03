@@ -286,7 +286,17 @@ class TextRendererNewSectionsTest {
         val human = HumanMove(listOf("Bd6", "Bd3"), 30, emptyList())
         val text = TextRenderer.render(explanation(listOf(Section.BestMoves(listOf("Rfe8"), human))))
 
-        assertTrue(text, text.contains("Человек: Bd6 Bd3 (слабее лучшего на 0.3). Ход заметен сразу"))
+        assertTrue(text, text.contains("Человек: Bd6 Bd3 (слабее лучшего на 0.3)."))
+        assertTrue(text, text.contains("Разница: Bd6 проще найти"))
+    }
+
+    @Test
+    fun `a human move that loses nothing is called equal, not weaker by zero`() {
+        val human = HumanMove(listOf("Bd6", "Bd3"), 2, emptyList())
+        val text = TextRenderer.render(explanation(listOf(Section.BestMoves(listOf("Rfe8"), human))))
+
+        assertTrue(text, text.contains("(равноценно лучшему)"))
+        assertFalse(text, text.contains("слабее лучшего на 0.0"))
     }
 
     // ——— ПОЧЕМУ ТАКАЯ ОЦЕНКА ———
@@ -302,8 +312,8 @@ class TextRendererNewSectionsTest {
         )
         val text = TextRenderer.render(explanation(listOf(reason)))
 
-        assertTrue(text, text.contains("ПОЧЕМУ ТАКАЯ ОЦЕНКА"))
-        assertTrue(text, text.contains("В варианте exf4 Nxf4 Bxd1 Qxd1 чёрные выигрывают качество."))
+        assertTrue(text, text.contains(TextRenderer.GROUP_MARK + " ПОЗИЦИЯ"))
+        assertTrue(text, text.contains("В варианте exf4 Nxf4 Bxd1 Qxd1 чёрные выигрывают материал, около двух пешек."))
     }
 
     @Test

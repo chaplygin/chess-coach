@@ -133,6 +133,47 @@ object SeeCalculator {
     }
 
     /**
+     * Размен на [target] целиком: обязательная часть, как в [exchangeLineSan], и
+     * дальше равные взятия, которые можно сделать, а можно и не делать.
+     * [forcedPlies] — сколько первых ходов обязательны. Без продолжения
+     * "exd4 Nxd4: пешка за пешку" читается как ошибка: на d4 видно, что бить
+     * можно и дальше, Nxd4 Qxd4.
+     */
+    data class ExchangeLine(val san: List<String>, val forcedPlies: Int)
+
+    fun fullExchangeLine(board: Board, target: Square, attacker: Side): ExchangeLine {
+        val working = turnedTo(board, attacker) ?: return ExchangeLine(emptyList(), 0)
+        val start = working.fen
+        val first = cheapestCapture(working, target) ?: return ExchangeLine(emptyList(), 0)
+        working.doMove(first)
+        val forced = listOf(first.toString()) + profitableReplies(working, target)
+        val optional = equalReplies(working, target)
+        return ExchangeLine(MoveNotation.uciToSanOrRaw(start, forced + optional), forced.size)
+    }
+
+    /**
+     * Взятия, после которых материал не меняется: забрать фигуру той же цены,
+     * которую тут же заберут. Ответное взятие идёт вместе с ним, иначе висящее
+     * "Nxd4" без "Qxd4" читается как потеря коня.
+     */
+    private fun equalReplies(board: Board, target: Square): List<String> {
+        val replies = ArrayList<String>()
+        while (replies.size < MAX_EQUAL_PLIES) {
+            val move = cheapestCapture(board, target) ?: break
+            val victim = pieceValue(board.getPiece(target))
+            val probe = board.clone()
+            probe.doMove(move)
+            if (victim - exchange(probe, target) != 0) break
+            replies += move.toString()
+            board.doMove(move)
+            replies += profitableReplies(board, target)
+        }
+        return replies
+    }
+
+    private const val MAX_EQUAL_PLIES = 4
+
+    /**
      * Что будет, если всё же взять обратно на [target]: первое взятие [attacker],
      * вынужденный ответ защитника и выгодные продолжения. Отвечает на вопрос
      * "почему взять обратно невыгодно" прямо ходами. Пусто — взять обратно нечем.

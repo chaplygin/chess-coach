@@ -109,6 +109,8 @@ data class HangingPieceFact(
  * Почти равный размен: [attacker] может взять на [square], и материал почти не
  * меняется. [deltaCentipawns] со знаком, с точки зрения того, кто берёт первым.
  * [lineSan] — весь размен: первое взятие без ответа рассказывало бы полдела.
+ * Первые [forcedPlies] ходов обязательны, дальше идут равные взятия, которые
+ * можно и не делать.
  */
 data class ExchangeFact(
     val square: Square,
@@ -117,6 +119,9 @@ data class ExchangeFact(
     override val favours: Side,
     override val evidence: Evidence,
     val lineSan: List<String> = emptyList(),
+    val forcedPlies: Int = lineSan.size,
+    /** Ход движка вместо равного продолжения, если лучшая линия от него отказывается. */
+    val engineChoiceSan: String? = null,
 ) : Fact
 
 data class ForkFact(

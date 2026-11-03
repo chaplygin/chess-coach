@@ -45,8 +45,14 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.material3.Switch
+import org.chesscoach.coach.model.Section
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.github.bhlangonijr.chesslib.Side
@@ -157,8 +163,10 @@ fun GameReviewScreen(
         delay(SETTLE_MS)
         thinking = true
         // Карточка разбирает сам выбранный ход: из позиции до него, со сравнением с лучшим.
+        // Прошлый ход соперника: разбор начинается с того, зачем он так сыграл.
+        val previous = positions.getOrNull(currentPly - 1)
         explanation = catchingNonCancellation {
-            container.coach.explain(ply.fenBefore, ply.uci, game.openingName)
+            container.coach.explain(ply.fenBefore, ply.uci, game.openingName, previous?.fenBefore, previous?.uci)
         }.onFailure { engineError = it.message ?: "Движок недоступен" }.getOrNull()
         thinking = false
     }
@@ -226,12 +234,18 @@ fun GameReviewScreen(
         selectedSquare = square.takeIf { tapped -> legalMoves.any { it.from == tapped } && tapped != selected }
     }
 
-    val arrows = remember(explanation, engineLines, lineActive) {
+    val context = LocalContext.current
+    var showContinuation by remember { mutableStateOf(continuationEnabled(context)) }
+    val arrows = remember(explanation, engineLines, lineActive, showContinuation) {
         when {
             lineActive -> engineLines.firstOrNull()?.let { listOf(BoardArrow(it.firstUci.take(2), it.firstUci.substring(2, 4), ArrowStyle.BEST_MOVE)) }.orEmpty()
-            else -> explanation?.let(BoardMarks::of).orEmpty()
+            else -> explanation?.let { e ->
+                BoardMarks.of(e).let { if (showContinuation) BoardMarks.withContinuation(it, e) else it }
+            }.orEmpty()
         }
     }
+    // Продолжение лучшей линии по шагам: номер на стрелке — номер шага здесь.
+    val continuation = remember(explanation) { explanation?.let(::continuationSteps).orEmpty() }
     val coachText = remember(explanation) { explanation?.let { TextRenderer.render(it, viewer, scoreLines = false) } }
     val coachVariations = remember(explanation) { explanation?.let(Variations::of).orEmpty() }
 
@@ -290,19 +304,7 @@ fun GameReviewScreen(
             modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            if (!lineActive) ArrowLegend(arrows)
-
-            ScanProgress(scan)
-
-            MoveStrip(
-                positions = positions,
-                currentPly = currentPly,
-                state = movesState,
-                evaluationsByPly = evaluationsByPly,
-                myColor = game.myColor,
-                onSelect = { currentPly = it },
-            )
-
+            // Свой вариант сразу под доской: внизу длинной страницы его не находили.
             if (lineActive) {
                 UserLineStrip(
                     line = line,
@@ -316,7 +318,35 @@ fun GameReviewScreen(
                     },
                 )
                 lineExplanation?.let { GroupCard { CoachText(it) } }
+            } else {
+                Text(
+                    "Свой вариант: нажмите на фигуру, потом на поле. Ходить можно за обе стороны.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Palette.secondaryText,
+                )
+                ContinuationRow(
+                    steps = continuation,
+                    enabled = showContinuation,
+                    shownFen = coachVariationFen,
+                    onToggle = {
+                        showContinuation = it
+                        saveContinuation(context, it)
+                    },
+                    onShow = { coachVariationFen = it },
+                )
+                ArrowLegend(arrows)
             }
+
+            ScanProgress(scan)
+
+            MoveStrip(
+                positions = positions,
+                currentPly = currentPly,
+                state = movesState,
+                evaluationsByPly = evaluationsByPly,
+                myColor = game.myColor,
+                onSelect = { currentPly = it },
+            )
 
             EvalGraphBar(
                 evaluations = scan.evaluations,
@@ -348,14 +378,6 @@ fun GameReviewScreen(
                 shownFen = coachVariationFen,
                 onShow = { coachVariationFen = it },
             )
-
-            if (!lineActive) {
-                Text(
-                    "Свой вариант: нажмите на фигуру и на поле, куда её поставить. Ходить можно за обе стороны.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Palette.secondaryText,
-                )
-            }
         }
     }
 
@@ -376,6 +398,70 @@ fun GameReviewScreen(
                 }
             },
         )
+    }
+}
+
+/** Шаг продолжения лучшей линии: номер как на стрелке, ход и позиция после него. */
+private data class ContinuationStep(val number: Int, val san: String, val fenAfter: String)
+
+private const val PREFS_REVIEW = "review"
+private const val KEY_CONTINUATION = "continuation"
+
+private fun continuationEnabled(context: android.content.Context): Boolean =
+    context.getSharedPreferences(PREFS_REVIEW, android.content.Context.MODE_PRIVATE).getBoolean(KEY_CONTINUATION, true)
+
+private fun saveContinuation(context: android.content.Context, enabled: Boolean) {
+    context.getSharedPreferences(PREFS_REVIEW, android.content.Context.MODE_PRIVATE).edit()
+        .putBoolean(KEY_CONTINUATION, enabled).apply()
+}
+
+/** Лучшая линия из позиции до хода, по шагам: 1 — лучший ход, 2 — ответ, 3 — свой следующий, 4 — ответ. */
+private fun continuationSteps(explanation: PositionExplanation): List<ContinuationStep> {
+    val best = explanation.section<Section.BestMoves>() ?: return emptyList()
+    var fen = explanation.fen
+    return best.computerLineUci.take(4).mapIndexedNotNull { index, uci ->
+        val move = BoardMoves.legal(fen).firstOrNull { it.uci == uci } ?: return@mapIndexedNotNull null
+        fen = move.fenAfter
+        ContinuationStep(index + 1, move.san, move.fenAfter)
+    }
+}
+
+/**
+ * Продолжение лучшей линии: пунктир на доске и номера здесь. Доска показывает
+ * позицию после сыгранного хода, а линия идёт из позиции до него, поэтому
+ * нажатие на номер ставит на доску позицию этого шага.
+ */
+@Composable
+private fun ContinuationRow(
+    steps: List<ContinuationStep>,
+    enabled: Boolean,
+    shownFen: String?,
+    onToggle: (Boolean) -> Unit,
+    onShow: (String?) -> Unit,
+) {
+    if (steps.isEmpty()) return
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("Продолжение", style = MaterialTheme.typography.labelMedium)
+        Switch(checked = enabled, onCheckedChange = onToggle)
+        if (enabled) {
+            steps.forEach { step ->
+                val selected = step.fenAfter == shownFen
+                Text(
+                    step.number.toString() + " " + MoveNotation.figurine(step.san),
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(if (selected) Palette.selected else Palette.card)
+                        .clickable { onShow(if (selected) null else step.fenAfter) }
+                        .padding(horizontal = 8.dp, vertical = 5.dp),
+                )
+            }
+        }
     }
 }
 
@@ -542,8 +628,23 @@ private fun CoachText(text: String) {
     val reference = text.substringAfter(marker, "")
     var referenceOpen by remember(text) { mutableStateOf(false) }
 
+    // Заголовки групп "━━ ДО ХОДА ━━" выделены: по ним глаз находит, где что.
+    val styled = remember(main) {
+        buildAnnotatedString {
+            main.lines().forEachIndexed { index, line ->
+                if (index > 0) append(System.lineSeparator())
+                if (line.startsWith(TextRenderer.GROUP_MARK)) {
+                    withStyle(SpanStyle(fontWeight = FontWeight.Bold, color = Palette.accent)) {
+                        append(line.removePrefix(TextRenderer.GROUP_MARK).removeSuffix(TextRenderer.GROUP_MARK).trim())
+                    }
+                } else {
+                    append(line)
+                }
+            }
+        }
+    }
     SelectionContainer {
-        Text(main, style = MaterialTheme.typography.bodyMedium)
+        Text(styled, style = MaterialTheme.typography.bodyMedium)
     }
     if (reference.isNotEmpty()) {
         TextButton(onClick = { referenceOpen = !referenceOpen }) {
@@ -575,6 +676,8 @@ private val LEGEND_ORDER = listOf(
     ArrowStyle.PLAYED_MOVE,
     ArrowStyle.THREAT,
     ArrowStyle.CONSEQUENCE,
+    ArrowStyle.LINE_MINE,
+    ArrowStyle.LINE_OPPONENT,
 )
 
 private fun legendLabel(style: ArrowStyle): String = when (style) {
@@ -582,6 +685,8 @@ private fun legendLabel(style: ArrowStyle): String = when (style) {
     ArrowStyle.PLAYED_MOVE -> "Сыгранный ход"
     ArrowStyle.THREAT -> "Угроза соперника"
     ArrowStyle.CONSEQUENCE -> "Следствие (пунктир)"
+    ArrowStyle.LINE_MINE -> "Дальше: свой ход"
+    ArrowStyle.LINE_OPPONENT, ArrowStyle.LINE_OPPONENT_FAR -> "Дальше: ответ соперника"
 }
 
 /**

@@ -28,6 +28,29 @@ class CoachReadingTest {
             // Мат конём в один ход: должен стоять в "Шахи и маты", а не вилкой на пешку.
             Triple("r2qkb2/pp2p1r1/1np3b1/8/2BPN1p1/8/PPP1RPPP/6K1 w - - 0 21", "c4f7", "Nf6"),
         )
+
+        /**
+         * Ходы из партии против Sverre-S, разобранные так, как их видит экран
+         * партии: с прошлым ходом соперника и с читателем за белых.
+         * Позиция, ход, позиция до прошлого хода, прошлый ход.
+         */
+        val GAME_MOVES = listOf(
+            // 3... d6 вместо exd4: размен, а не "берёт пешку".
+            listOf(
+                "r1bqkbnr/pppp1ppp/2n5/4p3/3PP3/5N2/PPP2PPP/RNBQKB1R b KQkq - 0 3", "d7d6",
+                "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3", "d2d4",
+            ),
+            // 6... g5: ни скрытого удара Qd8 на h4, ни связки пешки g5.
+            listOf(
+                "r1bqkb1r/ppp2pp1/2np1n1p/4p3/3PP2B/2N2N2/PPP2PPP/R2QKB1R b KQkq - 1 6", "g7g5",
+                "r1bqkb1r/ppp2pp1/2np1n1p/4p1B1/3PP3/2N2N2/PPP2PPP/R2QKB1R w KQkq - 0 6", "g5h4",
+            ),
+            // 7. Bxg5: после хода -4.5 должно быть объяснено.
+            listOf(
+                "r1bqkb1r/ppp2p2/2np1n1p/4p1p1/3PP2B/2N2N2/PPP2PPP/R2QKB1R w KQkq - 0 7", "h4g5",
+                "r1bqkb1r/ppp2pp1/2np1n1p/4p3/3PP2B/2N2N2/PPP2PPP/R2QKB1R b KQkq - 1 6", "g7g5",
+            ),
+        )
     }
 
     @Test
@@ -40,6 +63,15 @@ class CoachReadingTest {
         LocalStockfishClient(binary!!).use { engine ->
             val coach = CoachEngine(engine)
             runBlocking {
+                GAME_MOVES.forEach { (fen, move, previousFen, previousMove) ->
+                    println()
+                    println("=".repeat(72))
+                    println("FEN: $fen, сыгран $move (читатель за белых)")
+                    val explanation = coach.explain(fen, move, "Scotch Game", previousFen, previousMove)
+                    println(org.chesscoach.coach.text.TextRenderer.render(explanation, com.github.bhlangonijr.chesslib.Side.WHITE, scoreLines = false))
+                }
+                if (System.getenv("CHESSCOACH_ONLY_GAME") != null) return@runBlocking
+
                 // Позиция из настоящей партии: на ней отрабатывался формат текста.
                 println("=".repeat(72))
                 println(coach.explainAsText(REAL_GAME_FEN, REAL_GAME_MOVE))

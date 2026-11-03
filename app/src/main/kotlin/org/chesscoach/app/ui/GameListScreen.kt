@@ -53,16 +53,12 @@ fun GameListScreen(
     container: AppContainer,
     onBack: () -> Unit,
     onOpenGame: (GameSummary) -> Unit,
-    /** Открыть сводку «Мои ошибки» сразу после загрузки: так её открывает главный экран. */
-    openReport: Boolean = false,
+    onOpenErrors: () -> Unit,
 ) {
     var games by remember { mutableStateOf<List<GameSummary>>(emptyList()) }
     var username by remember { mutableStateOf(container.tokenStore.username()) }
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
-    var report by remember { mutableStateOf<String?>(null) }
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
         loading = true
@@ -76,7 +72,6 @@ fun GameListScreen(
             container.lichessApi.recentGames(name, max = 50)
         }.onSuccess {
             games = it
-            if (openReport) report = buildReport(container, context, it)
         }.onFailure { failure ->
             error = when (failure) {
                 is RateLimitedException ->
@@ -103,12 +98,7 @@ fun GameListScreen(
                 username?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             }
             Row {
-                TextButton(
-                    enabled = games.isNotEmpty(),
-                    onClick = {
-                        scope.launch { report = buildReport(container, context, games) }
-                    },
-                ) { Text("Мои ошибки") }
+                TextButton(onClick = onOpenErrors) { Text("Мои ошибки") }
                 TextButton(onClick = onBack) { Text("В меню") }
             }
         }
@@ -149,36 +139,7 @@ fun GameListScreen(
         }
 
     }
-
-    report?.let { text ->
-        AlertDialog(
-            onDismissRequest = { report = null },
-            confirmButton = { TextButton(onClick = { report = null }) { Text("Закрыть") } },
-            title = { Text("Мои ошибки") },
-            text = {
-                SelectionContainer {
-                    Text(text, modifier = Modifier.verticalScroll(rememberScrollState()))
-                }
-            },
-        )
-    }
 }
-
-/** Сводка повторяющихся ошибок по партиям, уже разобранным на этом телефоне. */
-private suspend fun buildReport(container: AppContainer, context: android.content.Context, games: List<GameSummary>): String =
-    catchingNonCancellation {
-        withContext(Dispatchers.Default) {
-            val analyzed = games.mapNotNull { game ->
-                val evaluations = GameAnalysisStore.read(context, game.id) ?: return@mapNotNull null
-                AnalyzedGame(
-                    iAmWhite = game.myColor == PlayerColor.WHITE,
-                    positions = GameReplay.replay(game.movesSan, game.initialFen),
-                    classifications = evaluations.associate { it.ply to it.classification },
-                )
-            }
-            container.coach.errorReport(analyzed).render()
-        }
-    }.getOrElse { "Не удалось собрать сводку." }
 
 @Composable
 private fun GameRow(game: GameSummary, onClick: () -> Unit) {

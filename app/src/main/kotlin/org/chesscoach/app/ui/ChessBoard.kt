@@ -22,6 +22,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -188,7 +189,7 @@ fun ChessBoard(
                     if (fromIndex != null && toIndex != null) {
                         val start = squareCenter(fromIndex, cell, flipped)
                         val end = squareCenter(toIndex, cell, flipped)
-                        drawMoveArrow(start, end, cell, arrow.style)
+                        drawMoveArrow(start, end, cell, arrow.style, arrow.label)
                     }
                 }
             }
@@ -224,21 +225,30 @@ fun arrowLegendColor(style: ArrowStyle): Color = when (style) {
     ArrowStyle.PLAYED_MOVE -> PLAYED_MOVE_ARROW_COLOR
     ArrowStyle.THREAT -> THREAT_ARROW_COLOR
     ArrowStyle.CONSEQUENCE -> CONSEQUENCE_ARROW_COLOR
+    ArrowStyle.LINE_MINE -> BEST_MOVE_ARROW_COLOR
+    ArrowStyle.LINE_OPPONENT, ArrowStyle.LINE_OPPONENT_FAR -> THREAT_ARROW_COLOR
 }
 
 /** Пунктирная ли стрелка данного вида — тоже общее знание доски и легенды. */
-fun arrowLegendDashed(style: ArrowStyle): Boolean = style == ArrowStyle.CONSEQUENCE
+fun arrowLegendDashed(style: ArrowStyle): Boolean = style == ArrowStyle.CONSEQUENCE ||
+    style == ArrowStyle.LINE_MINE || style == ArrowStyle.LINE_OPPONENT || style == ArrowStyle.LINE_OPPONENT_FAR
 
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMoveArrow(
     start: Offset,
     end: Offset,
     cell: Float,
     style: ArrowStyle,
+    label: Int? = null,
 ) {
     val dashed = arrowLegendDashed(style)
     val baseColor = arrowLegendColor(style)
     val color = baseColor.copy(alpha = if (dashed) CONSEQUENCE_ALPHA else ARROW_ALPHA)
-    val strokeWidth = cell * (if (dashed) CONSEQUENCE_STROKE_FACTOR else ARROW_STROKE_FACTOR)
+    val thin = style == ArrowStyle.CONSEQUENCE || style == ArrowStyle.LINE_OPPONENT_FAR
+    val strokeWidth = cell * when {
+        thin -> CONSEQUENCE_STROKE_FACTOR
+        dashed -> LINE_STROKE_FACTOR
+        else -> ARROW_STROKE_FACTOR
+    }
     val headLength = cell * (if (dashed) CONSEQUENCE_HEAD_FACTOR else ARROW_HEAD_FACTOR)
     val pathEffect = if (dashed) {
         PathEffect.dashPathEffect(floatArrayOf(cell * DASH_ON_FACTOR, cell * DASH_OFF_FACTOR))
@@ -276,4 +286,26 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMoveArrow(
         close()
     }
     drawPath(head, color)
+
+    // Номер хода в продолжении — кружок у острия.
+    if (label != null) {
+        val center = Offset(end.x - cos(angle) * headLength * 1.4f, end.y - sin(angle) * headLength * 1.4f)
+        val radius = cell * LABEL_RADIUS_FACTOR
+        drawCircle(baseColor, radius, center)
+        drawContext.canvas.nativeCanvas.drawText(
+            label.toString(),
+            center.x,
+            center.y + radius * 0.38f,
+            android.graphics.Paint().apply {
+                this.color = android.graphics.Color.WHITE
+                textAlign = android.graphics.Paint.Align.CENTER
+                textSize = radius * 1.15f
+                isFakeBoldText = true
+                isAntiAlias = true
+            },
+        )
+    }
 }
+
+private const val LINE_STROKE_FACTOR = 0.11f
+private const val LABEL_RADIUS_FACTOR = 0.17f

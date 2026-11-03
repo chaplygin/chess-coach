@@ -17,9 +17,19 @@ enum class ArrowStyle {
 
     /** Следствие лучшего хода: вилка, связка, рентген — то, ради чего он делается. */
     CONSEQUENCE,
+
+    /** Продолжение лучшей линии, ход той же стороны: зелёный пунктир. */
+    LINE_MINE,
+
+    /** Продолжение лучшей линии, ответ соперника: красный пунктир. */
+    LINE_OPPONENT,
+
+    /** Второй ответ соперника: красный пунктир тоньше. */
+    LINE_OPPONENT_FAR,
 }
 
-data class BoardArrow(val from: String, val to: String, val style: ArrowStyle)
+/** [label] — номер хода в продолжении лучшей линии: 1 у самого лучшего хода, дальше по порядку. */
+data class BoardArrow(val from: String, val to: String, val style: ArrowStyle, val label: Int? = null)
 
 /**
  * Перевод разбора в стрелки на доске.
@@ -54,6 +64,22 @@ object BoardMarks {
         move(explanation.bestMoveUci, ArrowStyle.BEST_MOVE)?.let(arrows::add)
 
         return arrows.distinct()
+    }
+
+    /**
+     * Стрелки с продолжением лучшей линии: лучший ход получает номер 1, дальше
+     * пунктиром ответ соперника (2), следующий свой ход (3) и ещё один ответ (4).
+     * Линия идёт из позиции до хода: экран показывает её по нажатию на номер.
+     */
+    fun withContinuation(arrows: List<BoardArrow>, explanation: PositionExplanation): List<BoardArrow> {
+        val line = explanation.section<Section.BestMoves>()?.computerLineUci.orEmpty()
+        if (line.size < 2) return arrows
+        val styles = listOf(ArrowStyle.LINE_OPPONENT, ArrowStyle.LINE_MINE, ArrowStyle.LINE_OPPONENT_FAR)
+        val continuation = line.drop(1).take(styles.size).mapIndexedNotNull { index, uci ->
+            move(uci, styles[index])?.copy(label = index + 2)
+        }
+        // Пунктир ложится под сплошные стрелки: продолжение — подсказка, а не главный ход.
+        return continuation + arrows.map { if (it.style == ArrowStyle.BEST_MOVE) it.copy(label = 1) else it }
     }
 
     /**

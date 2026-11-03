@@ -5,6 +5,7 @@ import org.chesscoach.coach.CandidateResult
 import org.chesscoach.coach.CoachEngine
 import com.github.bhlangonijr.chesslib.Side
 import org.chesscoach.coach.analysis.AnalyzedGame
+import org.chesscoach.coach.analysis.scoreChange
 import org.chesscoach.coach.analysis.RecapInput
 import org.chesscoach.coach.engine.CoachSearchLimits
 import org.chesscoach.coach.engine.EngineClient
@@ -121,6 +122,9 @@ object WebCoach {
      * Разбор тренера и стрелки вида "e2e4:BEST_MOVE;...". Пустой [playedUci]: хода из позиции не было.
      * [viewer] — "white" или "black", цвет читателя: от него зависят заголовки планов. Пусто — планы по цвету.
      * [scoreLines] — "false", когда оценки до и после хода страница показывает сама в заголовке хода.
+     * [previousFen] и [previousUci] — прошлый ход соперника, пусто — неизвестен.
+     * Стрелки идут вместе с продолжением лучшей линии, вида "e2e4:LINE_MINE:3":
+     * прятать пунктир или нет, решает страница.
      */
     @JvmStatic
     @JSExport
@@ -130,14 +134,21 @@ object WebCoach {
         opening: String?,
         viewer: String?,
         scoreLines: String?,
+        previousFen: String?,
+        previousUci: String?,
         bridge: EngineBridge,
         done: DoneCallback,
     ) {
         launch(done) {
-            val explanation = CoachEngine(BridgeClient(bridge))
-                .explain(fen, playedUci?.takeIf { it.isNotEmpty() }, opening?.takeIf { it.isNotEmpty() })
-            val arrows = BoardMarks.of(explanation)
-                .joinToString(ROW) { it.from + it.to + ":" + it.style.name }
+            val explanation = CoachEngine(BridgeClient(bridge)).explain(
+                fen,
+                playedUci?.takeIf { it.isNotEmpty() },
+                opening?.takeIf { it.isNotEmpty() },
+                previousFen?.takeIf { it.isNotEmpty() },
+                previousUci?.takeIf { it.isNotEmpty() },
+            )
+            val arrows = BoardMarks.withContinuation(BoardMarks.of(explanation), explanation)
+                .joinToString(ROW) { it.from + it.to + ":" + it.style.name + (it.label?.let { label -> ":$label" } ?: "") }
             val side = when (viewer) {
                 "white" -> Side.WHITE
                 "black" -> Side.BLACK
@@ -218,8 +229,15 @@ object WebCoach {
     }
 
     /**
-     * Сводка ошибок по партиям. [games] разделены [PART], в каждой: цвет, ходы,
-     * начальная позиция и классификации через запятую. Партия без разбора не передаётся.
+     * Сводка ошибок по партиям. [games] разделены [PART], в каждой через [FIELD]:
+     * цвет, ходы, начальная позиция, классификации через запятую, оценки после
+     * каждого хода через запятую ("35" или "m-3"), id партии, соперник.
+     * Партия без разбора не передаётся.
+     *
+     * Ответ через [PART]: числа (партии, ходы, зевки, ошибки, неточности, дебют,
+     * миттельшпиль, эндшпиль через запятую), главный вид ошибки, виды
+     * kind|title|label|advice|moves|games через [ROW] и примеры
+     * kind|gameId|opponent|ply|move|оценки через [ROW].
      */
     @JvmStatic
     @JSExport
@@ -229,13 +247,38 @@ object WebCoach {
                 val f = row.split(FIELD)
                 val classes = f[3].split(",").withIndex()
                     .associate { (index, name) -> index to MoveClassification.valueOf(name) }
+                val scores = f.getOrNull(4).orEmpty().split(",").withIndex().mapNotNull { (index, value) ->
+                    val score = when {
+                        value.startsWith("m") -> value.drop(1).toIntOrNull()?.let { Score.Mate(it) }
+                        else -> value.toIntOrNull()?.let { Score.Cp(it) }
+                    }
+                    score?.let { index to it }
+                }.toMap()
                 AnalyzedGame(
                     iAmWhite = f[0] == "white",
                     positions = GameReplay.replay(f[1].split(" ").filter { it.isNotEmpty() }, f[2].takeIf { it.isNotEmpty() }),
                     classifications = classes,
+                    scoresAfterWhite = scores,
+                    gameId = f.getOrNull(5).orEmpty(),
+                    opponent = f.getOrNull(6).orEmpty(),
                 )
             }
-            CoachEngine(NoEngine).errorReport(parsed).render() to ""
+            val report = CoachEngine(NoEngine).errorReport(parsed)
+            val phases = listOf(
+                org.chesscoach.coach.model.GamePhase.OPENING,
+                org.chesscoach.coach.model.GamePhase.MIDDLEGAME,
+                org.chesscoach.coach.model.GamePhase.ENDGAME,
+            ).map { report.byPhase[it] ?: 0 }
+            listOf(
+                (listOf(report.games, report.myMoves, report.blunders, report.mistakes, report.inaccuracies) + phases).joinToString(","),
+                report.main?.kind?.name.orEmpty(),
+                report.byKind.joinToString(ROW) {
+                    listOf(it.kind.name, it.kind.title, it.kind.label, it.kind.advice, it.moves, it.games).joinToString(FIELD)
+                },
+                report.examples.values.flatten().joinToString(ROW) {
+                    listOf(it.kind.name, it.gameId, it.opponent, it.ply, it.move, it.scoreChange()).joinToString(FIELD)
+                },
+            ).joinToString(PART) to ""
         }
     }
 

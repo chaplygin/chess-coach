@@ -88,9 +88,11 @@ class TacticalDetectorsTest {
 
     @Test
     fun `discovered attack detector finds a knight uncovering a rook`() {
-        val facts = DiscoveredAttackDetector().detect(board("r6k/8/8/8/N7/8/8/R6K w - - 0 1"))
+        // Цель — конь: ответить ладье по той же вертикали он не может.
+        val facts = DiscoveredAttackDetector().detect(board("n6k/8/8/8/N7/8/8/R6K w - - 0 1"))
+            .filterIsInstance<DiscoveredAttackFact>().filter { it.revealed == Square.A1 }
 
-        val fact = facts.filterIsInstance<DiscoveredAttackFact>().single()
+        val fact = facts.single()
         assertEquals(Square.A4, fact.moving)
         assertEquals(Square.A1, fact.revealed)
         assertEquals(Square.A8, fact.target)

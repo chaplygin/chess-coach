@@ -45,6 +45,23 @@ class PinSkewerDetector : Detector {
                 val behindPiece = board.getPiece(behind)
                 if (behindPiece.pieceSide != opponent) continue
 
+                // Передняя фигура сама бьёт связывающую, и это ей выгодно или ход её:
+                // тогда это не связка, а нападение на дальнобойщика. Пешка g5 против
+                // слона h4 при коне f6 ничем не скована, она просто берёт слона.
+                val pinnerDefended = AttackMap.isAttacked(board, square, side)
+                val canTake = AttackMap.attacksFrom(board, front) and square.bitboard != 0L && (
+                    !pinnerDefended ||
+                        (frontPiece.pieceType != PieceType.KING &&
+                            SeeCalculator.value(frontPiece.pieceType) <= SeeCalculator.value(piece.pieceType))
+                    )
+                if (behindPiece.pieceType != PieceType.KING && canTake && (
+                        board.sideToMove == opponent ||
+                            SeeCalculator.value(frontPiece.pieceType) < SeeCalculator.value(piece.pieceType)
+                        )
+                ) {
+                    continue
+                }
+
                 val frontValue = SeeCalculator.value(frontPiece.pieceType)
                 val evidence = Evidence.onBoard(board, square, front, behind)
 
