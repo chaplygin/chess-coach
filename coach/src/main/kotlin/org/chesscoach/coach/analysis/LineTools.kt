@@ -1,5 +1,6 @@
 package org.chesscoach.coach.analysis
 
+import com.github.bhlangonijr.chesslib.Bitboard
 import com.github.bhlangonijr.chesslib.Board
 import com.github.bhlangonijr.chesslib.Piece
 import com.github.bhlangonijr.chesslib.PieceType
@@ -83,6 +84,69 @@ internal object MatingMoves {
         val after = applyUciMove(fen, uci) ?: return false
         val board = Board()
         return runCatching { board.loadFromFen(after) }.isSuccess && board.isMated
+    }
+}
+
+/**
+ * Мат в два своих хода, если соперник между ними ничего не сделает: тихий ход
+ * готовит, второй матует. Так видна идея, которую детекторы видят только
+ * кусками ("конь связан", "поле e2 не прикрыть"). Проверяется правилами, без
+ * движка; можно ли её сыграть, решает уже движок в [PipelineOrchestrator].
+ *
+ * Под шахом своих ходов, кроме ответа на шах, нет, поэтому идея ищется на доске
+ * без шахующих фигур: она есть в позиции, но сыграть её сейчас нельзя.
+ */
+internal object MateIdeas {
+    data class Found(val prepUci: String, val mateUci: String, val prepSan: String, val mateSan: String)
+
+    fun find(fen: String): Found? {
+        val board = Board()
+        if (!runCatching { board.loadFromFen(fen) }.isSuccess) return null
+        return runCatching { search(board) }.getOrNull()
+    }
+
+    private fun search(board: Board): Found? {
+        val side = board.sideToMove
+        val base = board.clone()
+        if (board.isKingAttacked) {
+            Bitboard.bbToSquareList(board.squareAttackedBy(board.getKingSquare(side), side.flip())).forEach { square ->
+                base.unsetPiece(board.getPiece(square), square)
+            }
+        }
+        // Мат уже в один ход — это другой пункт, "Мат ходом ...".
+        if (base.legalMoves().any { boardAfter(base, side, it).isMated }) return null
+        for (prep in base.legalMoves()) {
+            if (base.getPiece(prep.to).pieceType == PieceType.KING) continue
+            val afterPrep = boardAfter(base, side, prep)
+            // Шах — уже форсированный вариант, его считает движок.
+            if (afterPrep.isKingAttacked) continue
+            val mate = legalMovesFor(afterPrep, side).firstOrNull { boardAfter(afterPrep, side, it).isMated } ?: continue
+            val turned = afterPrep.clone()
+            turned.sideToMove = side
+            turned.enPassant = Square.NONE
+            turned.enPassantTarget = Square.NONE
+            return Found(
+                prepUci = prep.toString(),
+                mateUci = mate.toString(),
+                prepSan = MoveNotation.uciToSanOrRaw(base.fen, listOf(prep.toString())).first(),
+                mateSan = MoveNotation.uciToSanOrRaw(turned.fen, listOf(mate.toString())).first(),
+            )
+        }
+        return null
+    }
+
+    /** Работает ли та же пара ходов в позиции [fen] со своей очередью. */
+    fun stillWorks(fen: String, found: Found): Boolean {
+        val board = Board()
+        if (!runCatching { board.loadFromFen(fen) }.isSuccess) return false
+        return runCatching {
+            if (board.isKingAttacked) return@runCatching false
+            val side = board.sideToMove
+            val prep = board.legalMoves().firstOrNull { it.toString() == found.prepUci } ?: return@runCatching false
+            val after = boardAfter(board, side, prep)
+            !after.isKingAttacked &&
+                legalMovesFor(after, side).any { it.toString() == found.mateUci && boardAfter(after, side, it).isMated }
+        }.getOrDefault(false)
     }
 }
 

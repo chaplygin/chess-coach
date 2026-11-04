@@ -61,4 +61,35 @@ object MoveNotation {
     /** Номер хода, как его пишут в записи партии. */
     fun fullMoveNumber(fen: String): Int =
         fen.trim().split(' ').getOrNull(5)?.toIntOrNull() ?: 1
+
+    /** Позиция после каждого хода [uciMoves]; на первом невозможном ходе список обрывается. */
+    fun fensAfter(fen: String, uciMoves: List<String>): List<String> {
+        val board = Board()
+        if (!runCatching { board.loadFromFen(fen) }.isSuccess) return emptyList()
+        val fens = ArrayList<String>()
+        for (uci in uciMoves) {
+            if (!runCatching { board.doMove(uci) }.getOrDefault(false)) break
+            fens += board.fen
+        }
+        return fens
+    }
+
+    /**
+     * Ходы варианта с номерами, как в записи партии: "14. Qxg4+", "f5", "15. Qh3".
+     * Вариант с хода чёрных начинается с "13... ".
+     */
+    fun numbered(fen: String, san: List<String>): List<String> {
+        var number = fullMoveNumber(fen)
+        var white = isWhiteToMove(fen)
+        return san.mapIndexed { index, move ->
+            val label = when {
+                white -> "$number. $move"
+                index == 0 -> "$number... $move"
+                else -> move
+            }
+            if (!white) number++
+            white = !white
+            label
+        }
+    }
 }

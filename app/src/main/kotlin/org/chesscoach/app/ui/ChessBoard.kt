@@ -41,6 +41,10 @@ import kotlin.math.sin
 private val LIGHT_SQUARE = Color(0xFFF0D9B5)
 private val DARK_SQUARE = Color(0xFFB58863)
 private val LAST_MOVE_TINT = Color(0x699BC700)
+
+// Прошлый ход соперника: куда пришёл — серым, откуда — бледнее.
+private val PREVIOUS_TO_TINT = Color(0x66707070)
+private val PREVIOUS_FROM_TINT = Color(0x33707070)
 private val SELECTED_TINT = Color(0x8014551E)
 private val TARGET_DOT = Color(0x4D14551E)
 
@@ -82,6 +86,9 @@ fun ChessBoard(
     flipped: Boolean = false,
     lastMoveFrom: String? = null,
     lastMoveTo: String? = null,
+    /** Ход перед последним: прошлый ход соперника, на который отвечали. */
+    previousMoveFrom: String? = null,
+    previousMoveTo: String? = null,
     arrows: List<BoardArrow> = emptyList(),
     /** Выбранная фигура и поля, куда она может пойти: так ход делается двумя нажатиями. */
     selectedSquare: String? = null,
@@ -117,6 +124,8 @@ fun ChessBoard(
                                     when {
                                         name == selectedSquare -> Modifier.background(SELECTED_TINT)
                                         index in highlight -> Modifier.background(LAST_MOVE_TINT)
+                                        name == previousMoveTo -> Modifier.background(PREVIOUS_TO_TINT)
+                                        name == previousMoveFrom -> Modifier.background(PREVIOUS_FROM_TINT)
                                         else -> Modifier
                                     }
                                 )

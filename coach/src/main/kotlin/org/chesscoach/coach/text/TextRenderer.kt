@@ -272,6 +272,11 @@ object TextRenderer {
         val moverMates = score is Score.Mate &&
             (score.movesToMate > 0) == (explanation.sideToMove == Side.WHITE)
         if (moverMates) return ": ведёт к мату."
+        // Под шахом любой ход прежде всего отвечает на шах: об этом первым.
+        checkAnswerPhrase(explanation)?.let { answer ->
+            val also = escapePhrase(explanation)?.let { " и " + decapitalize(it.removeSuffix(".")) }.orEmpty()
+            return ": " + decapitalize(answer.removeSuffix(".")) + also + "."
+        }
         // Снять угрозу важнее, чем то, что ход заодно берёт: без этого теряется больше.
         removedThreat(explanation)?.let { return ": снимает угрозу " + SanRuFormatter.move(it) + "." }
         capturedPhrase(explanation)?.let { return ": $it." }
@@ -333,6 +338,40 @@ object TextRenderer {
         val type = board.getPiece(from).pieceType ?: return null
         val blow = position.threat?.takeIf { threatHits }?.let { " " + SanRuFormatter.move(it.opponentMoveSan) }.orEmpty()
         return "Уводит " + PieceLexicon.name(type, GrammaticalCase.ACCUSATIVE) + " с " + sq(from) + " из-под удара" + blow + "."
+    }
+
+    /** Шахующие фигуры стороне на очереди. Пусто — шаха нет. */
+    private fun checkers(fen: String): List<Pair<Square, PieceType>> {
+        val board = Board()
+        // Позиция без короля (задачи, тесты) роняет chesslib на проверке шаха.
+        if (!runCatching { board.loadFromFen(fen) }.isSuccess || !runCatching { board.isKingAttacked }.getOrDefault(false)) return emptyList()
+        val side = board.sideToMove
+        return com.github.bhlangonijr.chesslib.Bitboard
+            .bbToSquareList(board.squareAttackedBy(board.getKingSquare(side), side.flip()))
+            .mapNotNull { square -> board.getPiece(square).pieceType?.let { square to it } }
+    }
+
+    /** "ладьи e1" или "ладьи e1 и слона b5". */
+    private fun checkersGenitive(checkers: List<Pair<Square, PieceType>>): String =
+        russianList(checkers.map { (square, type) -> PieceLexicon.name(type, GrammaticalCase.GENITIVE) + " " + sq(square) })
+
+    /**
+     * Как лучший ход отвечает на шах: закрывается, уводит короля. Взятие
+     * шахующей фигуры называет [capturedPhrase]. Null — шаха нет.
+     */
+    private fun checkAnswerPhrase(explanation: PositionExplanation): String? {
+        val uci = explanation.bestMoveUci.takeIf { it.length >= 4 } ?: return null
+        val checkers = checkers(explanation.fen).takeIf { it.isNotEmpty() } ?: return null
+        val board = Board()
+        if (!runCatching { board.loadFromFen(explanation.fen) }.isSuccess) return null
+        val from = Square.valueOf(uci.substring(0, 2).uppercase())
+        val to = Square.valueOf(uci.substring(2, 4).uppercase())
+        val moved = board.getPiece(from).pieceType ?: return null
+        return when {
+            moved == PieceType.KING -> "Уводит короля из-под шаха " + checkersGenitive(checkers) + "."
+            checkers.any { it.first == to } -> null
+            else -> "Закрывается от шаха " + checkersGenitive(checkers) + " " + PieceLexicon.name(moved, GrammaticalCase.INSTRUMENTAL) + "."
+        }
     }
 
     /** Ход, который хочется сыграть, и чем он хуже: сыгранный, а если он хорош, то ловушка. */
@@ -981,18 +1020,72 @@ object TextRenderer {
         val mover = explanation.sideToMove
         val captures = factItems(section.captures, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON, viewer)
             .map { (fact, item) -> checkedCapture(fact, item, section.captureChecks, mover) }
+        val checkers = checkers(explanation.fen)
+        val given = checkers.takeIf { it.isNotEmpty() }?.let {
+            val whom = if (viewer == mover) "Вам" else capitalize(SideLexicon.name(mover, GrammaticalCase.DATIVE))
+            Item("$whom шах " + russianList(it.map { (square, type) -> PieceLexicon.name(type, GrammaticalCase.INSTRUMENTAL) + " " + sq(square) }) +
+                ": сначала ответить на него — закрыться, взять шахующую фигуру или уйти королём.")
+        }
         return checkList(
-            mates = items(mateSentences(section.mates)) +
+            mates = listOfNotNull(given) + items(mateSentences(section.mates)) +
                 items(engineMates.filterIsInstance<MateFact>().map { "Есть форсированный мат в ${it.movesToMate} ${movesWord(it.movesToMate)}." }) +
                 items(statementsFor(mateFacts, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON)) +
                 items(checksSentences(section.checks)),
             captures = captures,
-            active = adviceItems(section.advice, glossary, memory, forkedSquares, explanation.scoreFromWhite, mover) +
+            active = listOfNotNull(section.mateIdea?.let { mateIdeaItem(it, mover) }) +
+                adviceItems(section.advice, glossary, memory, forkedSquares, explanation.scoreFromWhite, mover) +
                 items(statementsFor(section.activity, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON)) +
                 items(planSentences(section.plan, glossary, forkedSquares, targetSide = explanation.sideToMove.flip())),
             exchanges = exchangeItems(section.exchanges, forkedSquares, glossary, memory),
-        ).plus(ideaLine(assessment?.developmentPlan, assessment?.ideas.orEmpty()))
+        ).plus(myIdeaLine(assessment?.developmentPlan, assessment?.ideas.orEmpty(), checkers.isNotEmpty(), section.mateIdea))
             .joinToString(System.lineSeparator())
+    }
+
+    /**
+     * "Мат в два хода: Bh2, затем Qxg1#." и можно ли его сыграть: под шахом
+     * сначала ответ на шах, а после него идея может пропасть; без шаха —
+     * что ответит соперник на подготовку.
+     */
+    private fun mateIdeaItem(idea: org.chesscoach.coach.model.MateIdea, mover: Side): Item {
+        val head = "Мат в два хода: " + SanRuFormatter.move(idea.prepSan) + ", затем " + SanRuFormatter.move(idea.mateSan) +
+            ", если соперник не помешает."
+        val opponent = SideLexicon.name(mover.flip())
+        val note = when {
+            idea.inCheck && idea.afterLineSan.isEmpty() -> "Сейчас не сыграть: сначала надо ответить на шах."
+            idea.inCheck && idea.survives -> "Сейчас шах, но после " + SanRuFormatter.line(idea.afterLineSan) + " идея остаётся."
+            idea.inCheck -> "Сейчас не сыграть: сначала надо ответить на шах, а после " +
+                SanRuFormatter.line(idea.afterLineSan) + " мата уже нет."
+            idea.lossVsBestCentipawns >= CoachThresholds.ADVICE_MAX_LOSS_CP && idea.replySan != null ->
+                "Но " + opponent + " успевают защититься: после " + SanRuFormatter.move(idea.prepSan) + " " +
+                    SanRuFormatter.move(idea.replySan) + idea.scoreFromWhite?.let { " (оценка " + ScoreFormat.short(it) + ")" }.orEmpty() + "."
+            else -> idea.scoreFromWhite?.let { "Оценка после " + SanRuFormatter.move(idea.prepSan) + ": " + ScoreFormat.short(it) + "." }
+        }
+        val playable = !idea.inCheck && idea.lossVsBestCentipawns < CoachThresholds.ADVICE_MAX_LOSS_CP
+        return Item(head, listOfNotNull(note).map { Item(it) }, weight = if (playable) MATE_IDEA_WEIGHT else -BAD_ADVICE_PENALTY / 2)
+    }
+
+    /** Матовая идея, которую можно сыграть, — первой в активных ходах. */
+    private const val MATE_IDEA_WEIGHT = 500_000
+
+    /**
+     * "Идея" своего плана. Под шахом общая "подтянуть фигуры к королю" ничего не
+     * говорит: сначала ответить на шах. Найденный мат называем поимённо.
+     */
+    private fun myIdeaLine(
+        plan: DevelopmentPlan?,
+        ideas: List<StrategicIdea>,
+        inCheck: Boolean,
+        mateIdea: org.chesscoach.coach.model.MateIdea?,
+    ): List<String> {
+        if (!inCheck && mateIdea == null) return ideaLine(plan, ideas)
+        val phrases = listOfNotNull(
+            "сначала ответить на шах".takeIf { inCheck },
+            mateIdea?.takeIf { !it.inCheck || it.survives }?.let {
+                "готовить мат " + SanRuFormatter.move(it.prepSan) + " и " + SanRuFormatter.move(it.mateSan)
+            },
+        ) + plan?.let(::developmentPhrases).orEmpty() +
+            ideas.filterNot { inCheck && it == StrategicIdea.DEFEND }.map { ideaPhrase(it) }
+        return listOf(BULLET + "Идея: " + phrases.joinToString(", ") + ".")
     }
 
     /**
@@ -1260,12 +1353,14 @@ object TextRenderer {
             ?.takeIf { section.moveSan == explanation.bestMoveSan }
             ?.let { capitalize(it) + "." }
         val escape = escapePhrase(explanation)?.takeIf { section.moveSan == explanation.bestMoveSan && captured == null }
+        val checkAnswer = checkAnswerPhrase(explanation)?.takeIf { section.moveSan == explanation.bestMoveSan }
         // Снятая угроза — первой: без неё ход теряет больше, чем выигрывает всё остальное.
         val threatMove = removedThreat(explanation)?.takeIf { section.moveSan == explanation.bestMoveSan }
         val (threatReasons, otherReasons) = section.reasons.partition { reason ->
             threatMove != null && reason.facts.any { it is ProphylaxisFact && it.preventedMoveSan == threatMove }
         }
-        val lines = threatReasons.mapNotNull { reasonSentence(it, glossary, memory, forkedSquares) } +
+        val lines = listOfNotNull(checkAnswer) +
+            threatReasons.mapNotNull { reasonSentence(it, glossary, memory, forkedSquares) } +
             listOfNotNull(escape, captured) +
             otherReasons.mapNotNull { reasonSentence(it, glossary, memory, forkedSquares) }
         if (lines.isEmpty() && !section.pointIsInTheLine) return null

@@ -125,6 +125,9 @@ input {
 .sq.l { background: #f0d9b5; color: #b58863; }
 .sq.d { background: #b58863; color: #f0d9b5; }
 .sq.hl::after { content: ""; position: absolute; inset: 0; background: rgba(155, 199, 0, 0.41); }
+/* Прошлый ход соперника: куда пришёл — серым, откуда — бледнее. */
+.sq.prev-to::after { content: ""; position: absolute; inset: 0; background: rgba(112, 112, 112, 0.4); }
+.sq.prev-from::after { content: ""; position: absolute; inset: 0; background: rgba(112, 112, 112, 0.2); }
 .sq.sel::after { content: ""; position: absolute; inset: 0; background: rgba(20, 85, 30, 0.5); }
 .board.live .sq { cursor: pointer; }
 .dot-target { position: absolute; z-index: 3; width: 32%; height: 32%; border-radius: 50%; background: rgba(20, 85, 30, 0.3); pointer-events: none; }
@@ -192,10 +195,18 @@ button.wide { width: 100%; margin: 12px 0; }
 .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .stat strong { display: block; font-size: 24px; }
 .dot { flex: none; width: 10px; height: 10px; border-radius: 50%; }
-.engine-lines { min-height: 44px; font-size: 14px; margin-bottom: 4px; }
-.engine-line { display: flex; gap: 6px; align-items: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.engine-line .score { flex: none; padding: 0 5px; border-radius: 4px; background: #3a3a3c; color: #fff; font-size: 12px; }
+.engine-lines { min-height: 62px; font-size: 14px; margin-bottom: 4px; display: flex; flex-direction: column; gap: 3px; }
+.engine-lines .note.small { font-size: 12px; }
+.engine-line { display: flex; gap: 6px; align-items: center; white-space: nowrap; }
+.engine-line .score { flex: none; padding: 0 5px; border-radius: 4px; background: #3a3a3c; color: #fff; font-size: 12px; line-height: 1.4; }
+.engine-line .moves-line { overflow-x: auto; scrollbar-width: none; }
+.headline-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.headline-row .headline { margin-bottom: 0; }
+.key-mark { flex: none; color: #fff; font-weight: 700; font-size: 15px; padding: 0 9px; border-radius: 999px; }
 .headline { display: block; font-size: 17px; margin-bottom: 6px; }
+.variation button.step { display: inline-flex; flex-direction: column; align-items: center; line-height: 1.2; }
+.variation button.step .eval { font-size: 11px; color: var(--muted); }
+.chips .count { font-size: 11px; opacity: 0.75; }
 .moment { margin: 0 0 8px; font-size: 14px; }
 .user-line .variation { margin: 6px 0; }
 .user-line .eval { font-size: 12px; color: var(--muted); }

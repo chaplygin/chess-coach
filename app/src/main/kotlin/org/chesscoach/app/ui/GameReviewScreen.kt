@@ -34,6 +34,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -78,8 +79,17 @@ import org.chesscoach.core.catchingNonCancellation
 import org.chesscoach.core.mapCatchingNonCancellation
 import org.chesscoach.engine.SearchLimits
 
-/** Строка движка над доской: оценка от лица белых и начало варианта. */
-private data class EngineView(val scoreFromWhite: Score, val sanLine: List<String>, val firstUci: String)
+/** Строка движка над доской: оценка от лица белых, начало варианта и позиция после каждого хода. */
+private data class EngineView(
+    val scoreFromWhite: Score,
+    val sanLine: List<String>,
+    val firstUci: String,
+    val startFen: String,
+    val fens: List<String>,
+)
+
+/** Короткий расчёт каждой позиции варианта: оценка под ходом, как в ленте партии. */
+private val STEP_LIMITS = SearchLimits(movetimeMs = 120, multiPv = 1)
 
 /** Ход своего варианта: человек сыграл его на доске, а движок оценил позицию после. */
 private data class LineMove(
@@ -124,6 +134,8 @@ fun GameReviewScreen(
     var thinking by remember(game.id) { mutableStateOf(false) }
     var engineError by remember(game.id) { mutableStateOf<String?>(null) }
     var engineLines by remember(game.id) { mutableStateOf<List<EngineView>>(emptyList()) }
+    // Оценка позиции по её FEN: у позиции одно число, где бы она ни показывалась.
+    val stepScores = remember(game.id) { mutableStateMapOf<String, Score>() }
 
     // Свой вариант: ходы с позиции партии, сыгранные на доске. Курсор — показанный ход, -1 — исходная позиция.
     var line by remember(game.id) { mutableStateOf<List<LineMove>>(emptyList()) }
@@ -162,6 +174,15 @@ fun GameReviewScreen(
         explanation = catchingNonCancellation {
             container.coach.explain(ply.fenBefore, ply.uci, game.openingName, previous?.fenBefore, previous?.uci)
         }.onFailure { engineError = it.message ?: "Движок недоступен" }.getOrNull()
+        // Оценки тренера — главные: позиция после хода и после лучшего хода
+        // показываются с теми же числами, что в тексте разбора.
+        explanation?.let { e ->
+            e.section<Section.AfterMove>()?.scoreFromWhite?.let { stepScores[ply.fenAfter] = it }
+            Variations.of(e).forEach { variation ->
+                val first = variation.fens.firstOrNull() ?: return@forEach
+                variation.firstScoreFromWhite?.let { stepScores[first] = it }
+            }
+        }
         thinking = false
     }
 
@@ -180,7 +201,15 @@ fun GameReviewScreen(
                         ScoreFormat.toWhitePerspective(engineLine.score, side),
                         MoveNotation.uciToSanOrRaw(displayedFen, engineLine.pv.take(6)),
                         first,
+                        displayedFen,
+                        MoveNotation.fensAfter(displayedFen, engineLine.pv.take(6)),
                     )
+                }
+                // Оценка позиции у всех одна: если тренер её уже назвал, не перебиваем.
+                engineLines.firstOrNull()?.let { if (displayedFen !in stepScores) stepScores[displayedFen] = it.scoreFromWhite }
+                // Лучший ход и сама позиция — одно число.
+                engineLines.firstOrNull()?.fens?.firstOrNull()?.let { first ->
+                    if (first !in stepScores) stepScores[displayedFen]?.let { stepScores[first] = it }
                 }
                 // Оценка хода варианта — это оценка позиции после него.
                 val score = engineLines.firstOrNull()?.scoreFromWhite
@@ -243,6 +272,23 @@ fun GameReviewScreen(
     val coachVariations = remember(explanation) { explanation?.let(Variations::of).orEmpty() }
     val playedBest = explanation?.section<Section.PlayedMove>()?.matchesBest == true
 
+    // Оценки под ходами вариантов: каждую позицию коротко считает движок,
+    // уже посчитанные не трогаем. Пока думает тренер, движок его.
+    val stepFens = remember(engineLines, coachVariations) {
+        (engineLines.flatMap { it.fens } + coachVariations.flatMap { it.fens }).distinct()
+    }
+    LaunchedEffect(stepFens, thinking) {
+        if (thinking || stepFens.isEmpty()) return@LaunchedEffect
+        delay(SETTLE_MS)
+        val analyzer = container.engine.analyzer().getOrNull() ?: return@LaunchedEffect
+        for (fen in stepFens) {
+            if (fen in stepScores || GameEnd.of(fen) != null) continue
+            val result = catchingNonCancellation { analyzer.analyze(fen, STEP_LIMITS) }.getOrNull() ?: continue
+            val top = result.lines.minByOrNull { it.multiPvIndex } ?: continue
+            stepScores[fen] = ScoreFormat.toWhitePerspective(top.score, MoveNotation.sideToMove(fen))
+        }
+    }
+
     // Доска разворачивается так, как её видел игрок за своими фигурами.
     val flipped = game.myColor == PlayerColor.BLACK
 
@@ -268,12 +314,16 @@ fun GameReviewScreen(
                 lineActive -> null
                 else -> positions.getOrNull(currentPly)?.uci
             }
+            // Прошлый ход соперника — только на позиции партии: в варианте он другой.
+            val previousMove = positions.getOrNull(currentPly - 1)?.uci?.takeIf { coachVariationFen == null && !lineActive }
             ChessBoard(
                 fen = displayedFen,
                 modifier = Modifier.width(boardSize),
                 flipped = flipped,
                 lastMoveFrom = lastMove?.take(2),
                 lastMoveTo = lastMove?.substring(2, 4),
+                previousMoveFrom = previousMove?.take(2),
+                previousMoveTo = previousMove?.substring(2, 4),
                 arrows = if (coachVariationFen == null) arrows else emptyList(),
                 selectedSquare = selectedSquare,
                 targetSquares = legalMoves.filter { it.from == selectedSquare }.map { it.to }.toSet(),
@@ -282,7 +332,7 @@ fun GameReviewScreen(
             EvalBar(
                 score = when {
                     lineActive -> engineLines.firstOrNull()?.scoreFromWhite
-                    else -> evaluationsByPly[currentPly]?.scoreAfterWhite ?: engineLines.firstOrNull()?.scoreFromWhite
+                    else -> stepScores[displayedFen] ?: evaluationsByPly[currentPly]?.scoreAfterWhite ?: engineLines.firstOrNull()?.scoreFromWhite
                 },
                 flipped = flipped,
                 modifier = Modifier.width(EVAL_BAR_WIDTH).fillMaxHeight(),
@@ -311,9 +361,14 @@ fun GameReviewScreen(
                 style = MaterialTheme.typography.bodySmall,
                 color = Palette.secondaryText,
             )
+            val betterExisted = !playedBest && explanation?.playedMoveSan != null
             ContinuationRow(
                 steps = continuation,
-                label = if (playedBest || explanation?.playedMoveSan == null) "Продолжение:" else "Лучше было:",
+                label = if (betterExisted) "Лучше было:" else "Продолжение:",
+                // Рядом с лучшим — сыгранный: нажатие возвращает доску к нему.
+                played = positions.getOrNull(currentPly)?.takeIf { betterExisted }?.let { ply ->
+                    "Сыграно: " + MoveNotation.figurine(ply.san) + (stepScores[ply.fenAfter]?.let { " (" + ScoreFormat.short(it) + ")" } ?: "")
+                },
                 shownFen = coachVariationFen,
                 onShow = { coachVariationFen = it },
             )
@@ -360,6 +415,7 @@ fun GameReviewScreen(
         )
         VariationStrips(
             variations = coachVariations,
+            scores = stepScores,
             shownFen = coachVariationFen,
             onShow = { coachVariationFen = it },
         )
@@ -383,7 +439,7 @@ fun GameReviewScreen(
                         modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        EngineLinesHeader(engineLines, GameEnd.of(displayedFen))
+                        EngineLinesHeader(engineLines, stepScores, GameEnd.of(displayedFen))
                         underBoard()
                         ScanProgress(scan)
                         graph()
@@ -397,7 +453,7 @@ fun GameReviewScreen(
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 header()
-                EngineLinesHeader(engineLines, GameEnd.of(displayedFen))
+                EngineLinesHeader(engineLines, stepScores, GameEnd.of(displayedFen))
                 board(this@BoxWithConstraints.maxWidth - 24.dp - EVAL_BAR_WIDTH - EVAL_BAR_GAP)
                 Column(
                     modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
@@ -458,6 +514,7 @@ private fun continuationSteps(explanation: PositionExplanation): List<Continuati
 private fun ContinuationRow(
     steps: List<ContinuationStep>,
     label: String,
+    played: String?,
     shownFen: String?,
     onShow: (String?) -> Unit,
 ) {
@@ -467,6 +524,20 @@ private fun ContinuationRow(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        if (played != null) {
+            // Подсвечена, пока на доске сыгранная позиция.
+            val selected = shownFen == null
+            Text(
+                played,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(if (selected) Palette.selected else Palette.card)
+                    .clickable { onShow(null) }
+                    .padding(horizontal = 8.dp, vertical = 5.dp),
+            )
+        }
         Text(label, style = MaterialTheme.typography.labelMedium)
         run {
             steps.forEach { step ->
@@ -493,27 +564,45 @@ private fun promotionName(letter: Char?): String = when (letter) {
     else -> "Ферзь"
 }
 
-/** Две лучшие линии движка для позиции на доске, как над доской в анализе Lichess. */
+/**
+ * Две лучшие линии движка для позиции на доске, как над доской в анализе Lichess:
+ * чей ответ, ходы с номерами и оценка после каждого хода. Оценка первой линии —
+ * оценка самой позиции, та же, что на полосе.
+ */
 @Composable
-private fun EngineLinesHeader(lines: List<EngineView>, gameEnd: String?) {
-    Column(Modifier.fillMaxWidth().height(44.dp), verticalArrangement = Arrangement.Center) {
+private fun EngineLinesHeader(lines: List<EngineView>, scores: Map<String, Score>, gameEnd: String?) {
+    Column(Modifier.fillMaxWidth().height(58.dp), verticalArrangement = Arrangement.spacedBy(3.dp, Alignment.CenterVertically)) {
         if (gameEnd != null) {
             Text(gameEnd, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
             return@Column
         }
-        lines.forEach { view ->
+        lines.firstOrNull()?.let { first ->
+            Text(
+                "Ответ " + (if (MoveNotation.isWhiteToMove(first.startFen)) "белых" else "чёрных") + ", две лучшие линии:",
+                style = MaterialTheme.typography.labelSmall,
+                color = Palette.secondaryText,
+            )
+        }
+        lines.forEachIndexed { index, view ->
+            // Оценка линии — оценка после её первого хода, она же стоит и под ним.
+            val lineScore = (if (index == 0) scores[view.startFen] else null)
+                ?: view.fens.firstOrNull()?.let(scores::get) ?: view.scoreFromWhite
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    ScoreFormat.short(view.scoreFromWhite),
+                    ScoreFormat.short(lineScore),
                     color = Color.White,
                     fontSize = 11.sp,
+                    lineHeight = 13.sp,
                     modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(Color(0xFF3A3A3C)).padding(horizontal = 5.dp, vertical = 1.dp),
                 )
                 Text(
-                    view.sanLine.joinToString(" ") { MoveNotation.figurine(it) },
+                    MoveNotation.numbered(view.startFen, view.sanLine).mapIndexed { step, move ->
+                        MoveNotation.figurine(move) + (view.fens.getOrNull(step)?.takeIf { step > 0 }?.let(scores::get)?.let { " (" + ScoreFormat.short(it) + ")" } ?: "")
+                    }.joinToString(" "),
                     style = MaterialTheme.typography.bodySmall,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                    softWrap = false,
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
                 )
             }
         }
@@ -616,6 +705,7 @@ private fun UserLineStrip(
 @Composable
 private fun VariationStrips(
     variations: List<Variation>,
+    scores: Map<String, Score>,
     shownFen: String?,
     onShow: (String?) -> Unit,
 ) {
@@ -627,17 +717,24 @@ private fun VariationStrips(
                 modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                variation.san.forEachIndexed { index, san ->
+                MoveNotation.numbered(variation.startFen, variation.san).forEachIndexed { index, san ->
                     val fen = variation.fens.getOrNull(index)
-                    Text(
-                        MoveNotation.figurine(san),
-                        fontWeight = if (fen == shownFen) FontWeight.Bold else FontWeight.Normal,
+                    // Оценка после хода, как в ленте партии; пока движок считает — многоточие.
+                    Column(
                         modifier = Modifier
                             .clip(RoundedCornerShape(6.dp))
                             .background(if (fen == shownFen) Palette.selected else Palette.card)
                             .clickable { onShow(fen) }
-                            .padding(horizontal = 10.dp, vertical = 6.dp),
-                    )
+                            .padding(horizontal = 10.dp, vertical = 4.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text(MoveNotation.figurine(san), fontWeight = if (fen == shownFen) FontWeight.Bold else FontWeight.Normal)
+                        Text(
+                            fen?.let(scores::get)?.let(ScoreFormat::short) ?: if (fen != null && GameEnd.of(fen) != null) "#" else "…",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Palette.secondaryText,
+                        )
+                    }
                 }
             }
         }
@@ -847,11 +944,23 @@ private fun AdviceCard(
                     Text("Выберите ход в ленте или нажмите ›, чтобы тренер его разобрал.", style = MaterialTheme.typography.bodySmall, color = Palette.secondaryText)
                     return@Column
                 }
-                Text(
-                    MoveHeadline.of(ply, null, null, explanation?.classification ?: evaluation?.classification),
-                    fontWeight = FontWeight.SemiBold,
-                    style = MaterialTheme.typography.titleMedium,
-                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    // Ключевой момент партии виден сразу: цветной восклицательный знак.
+                    moment?.let {
+                        Text(
+                            "!",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp,
+                            modifier = Modifier.clip(RoundedCornerShape(50)).background(momentColor(it.kind)).padding(horizontal = 9.dp, vertical = 1.dp),
+                        )
+                    }
+                    Text(
+                        MoveHeadline.of(ply, null, null, explanation?.classification ?: evaluation?.classification, withSide = true),
+                        fontWeight = FontWeight.SemiBold,
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                }
                 explanation?.let { ScoreTags(it) }
                 // Числа момента — из быстрого разбора партии: здесь их заменяют оценки тренера выше.
                 moment?.let {

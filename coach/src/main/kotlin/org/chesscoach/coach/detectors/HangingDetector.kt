@@ -20,14 +20,22 @@ class HangingDetector : Detector {
     override val name: String = "hanging"
 
     override fun detect(board: Board): List<Fact> {
+        val original = board
         val facts = ArrayList<Fact>()
+        val calm = withoutCheckers(original)
 
         for (square in Square.values()) {
             if (square == Square.NONE) continue
-            val piece = board.getPiece(square)
+            val piece = original.getPiece(square)
             if (piece == Piece.NONE || piece.pieceType == PieceType.KING) continue
 
             val attacker = piece.pieceSide.flip()
+            // Удар соперника стороны, которой шах: её взятия обратно считаем на
+            // доске без шахующей фигуры, будто на шах уже ответили. Иначе среди
+            // законных ходов только уходы от шаха, и защищённая фигура
+            // выглядела бы брошенной: "конь e7, защиты нет" при слоне d6.
+            @Suppress("NAME_SHADOWING")
+            val board = if (calm != null && original.sideToMove != attacker) calm else original
             val loss = SeeCalculator.evaluateSquare(board, square, attacker)
             // Меньше порога — почти равный размен, им занимается ExchangeDetector.
             if (loss >= SeeCalculator.WINNING_MIN_CP) {
@@ -56,6 +64,18 @@ class HangingDetector : Detector {
         }
 
         return facts
+    }
+
+    /** Копия доски без фигур, которые шахуют стороне на очереди. Null — шаха нет. */
+    private fun withoutCheckers(board: Board): Board? {
+        // Позиция без короля (задачи, тесты) роняет chesslib на проверке шаха.
+        if (!runCatching { board.isKingAttacked }.getOrDefault(false)) return null
+        val side = board.sideToMove
+        val calm = board.clone()
+        AttackMap.attackersOf(board, board.getKingSquare(side), side.flip()).forEach { square ->
+            calm.unsetPiece(board.getPiece(square), square)
+        }
+        return calm
     }
 
     /** Какой фигурой пришлось бы брать обратно: именно она и теряется, если размен продолжат. */

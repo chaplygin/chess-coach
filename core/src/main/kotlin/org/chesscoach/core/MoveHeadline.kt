@@ -13,8 +13,9 @@ import kotlin.math.exp
  */
 object MoveHeadline {
 
-    fun of(ply: PlyPosition, before: Score?, after: Score?, classification: MoveClassification?): String {
-        val move = moveLabel(ply)
+    /** [withSide] — после хода чья он: "13... Kd7, чёрные — зевок". */
+    fun of(ply: PlyPosition, before: Score?, after: Score?, classification: MoveClassification?, withSide: Boolean = false): String {
+        val move = moveLabel(ply) + if (withSide) ", " + (if (ply.whiteMoved) "белые" else "чёрные") else ""
         val label = classification?.let { " — " + label(it) }.orEmpty()
         val scores = when {
             before != null && after != null -> ": " + ScoreFormat.short(before) + " → " + ScoreFormat.short(after)

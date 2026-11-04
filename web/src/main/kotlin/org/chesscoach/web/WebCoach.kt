@@ -23,6 +23,7 @@ import org.chesscoach.core.MoveNotation
 import org.chesscoach.core.PlyEvaluation
 import org.chesscoach.core.PlyPosition
 import org.chesscoach.core.Score
+import org.chesscoach.core.ScoreFormat
 import org.chesscoach.core.UciParser
 import org.teavm.jso.JSExport
 import org.teavm.jso.JSFunctor
@@ -287,9 +288,10 @@ object WebCoach {
         override suspend fun analyse(fen: String, limits: CoachSearchLimits): List<EngineLine> = emptyList()
     }
 
-    /** Варианты строкой: title|fen,fen|san san;... */
+    /** Варианты строкой: title|fen,fen|san san|оценка после первого хода;... */
     private fun encodeVariations(variations: List<Variation>): String = variations.joinToString(ROW) {
-        it.title + FIELD + it.fens.joinToString(",") + FIELD + it.san.joinToString(" ")
+        it.title + FIELD + it.fens.joinToString(",") + FIELD + it.san.joinToString(" ") + FIELD +
+            (it.firstScoreFromWhite?.let(ScoreFormat::short) ?: "")
     }
 
     private fun launch(done: DoneCallback, block: suspend () -> Pair<String, String>) {

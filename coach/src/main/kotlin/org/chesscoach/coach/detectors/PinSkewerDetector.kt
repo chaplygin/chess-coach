@@ -84,7 +84,8 @@ class PinSkewerDetector : Detector {
                         evidence = evidence,
                     )
 
-                    frontValue > SeeCalculator.value(behindPiece.pieceType) -> facts += SkewerFact(
+                    frontValue > SeeCalculator.value(behindPiece.pieceType) &&
+                        winsBehind(board, square, front, behind) -> facts += SkewerFact(
                         front = front,
                         behind = behind,
                         attacker = square,
@@ -96,6 +97,17 @@ class PinSkewerDetector : Detector {
         }
 
         return facts
+    }
+
+    /**
+     * Рентген чего-то стоит, только если после ухода передней фигуры заднюю
+     * можно взять с выгодой: она не защищена никем, кроме самой передней, или
+     * дороже нападающего. Пешка c7 за королём c6 при слоне d6 ничего не даёт.
+     */
+    private fun winsBehind(board: Board, attacker: Square, front: Square, behind: Square): Boolean {
+        val behindPiece = board.getPiece(behind)
+        if (SeeCalculator.value(behindPiece.pieceType) > SeeCalculator.value(board.getPiece(attacker).pieceType)) return true
+        return AttackMap.attackersOf(board, behind, behindPiece.pieceSide).none { it != front }
     }
 
     private companion object {

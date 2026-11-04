@@ -32,6 +32,7 @@ import org.chesscoach.coach.model.ForkFact
 import org.chesscoach.coach.model.HangingPieceFact
 import org.chesscoach.coach.model.KingSafetyFact
 import org.chesscoach.coach.model.MateFact
+import org.chesscoach.coach.model.MateIdea
 import org.chesscoach.coach.model.MobilityEdgeFact
 import org.chesscoach.coach.model.OpenFileRookFact
 import org.chesscoach.coach.model.OutpostFact
@@ -132,7 +133,12 @@ class PipelineOrchestrator(
         val previous = previousMove(previousFen, previousMoveUci, fen, featuresBefore, sideToMove)
         sections += myPositionSection(fen, featuresBefore, sideToMove, threat, opponentAdvice(fen, featuresBefore, sideToMove), previous)
         sections += myAttackSection(fen, featuresBefore, sideToMove, ownAdvice(fen, featuresBefore, sideToMove, bestLine), bestLine)
-            .let { attack -> attack.copy(captureChecks = captureChecks(fen, attack.captures, sideToMove, bestLine)) }
+            .let { attack ->
+                attack.copy(
+                    captureChecks = captureChecks(fen, attack.captures, sideToMove, bestLine),
+                    mateIdea = mateIdea(fen, sideToMove, bestLine),
+                )
+            }
 
         // 4. Почему лучший ход хорош, профилактика и разбор сыгранного хода
         // в сравнении с лучшим.
@@ -534,6 +540,45 @@ class PipelineOrchestrator(
         }
     }
 
+    /**
+     * Мат в два своих хода и можно ли его сыграть. Под шахом — работает ли идея
+     * после ответа на шах из лучшей линии и ответа соперника. Без шаха —
+     * что отвечает соперник на подготовительный ход и во что это обходится.
+     */
+    private suspend fun mateIdea(fen: String, mover: Side, bestLine: EngineLine?): MateIdea? {
+        val found = MateIdeas.find(fen) ?: return null
+        val board = Board()
+        if (!runCatching { board.loadFromFen(fen) }.isSuccess) return null
+        if (runCatching { board.isKingAttacked }.getOrDefault(false)) {
+            val answer = bestLine?.pv?.take(2).orEmpty()
+            if (answer.size < 2) return MateIdea(found.prepSan, found.mateSan, inCheck = true)
+            val after = answer.fold(fen) { current, uci -> applyUciMove(current, uci) ?: return null }
+            return MateIdea(
+                found.prepSan,
+                found.mateSan,
+                inCheck = true,
+                afterLineSan = MoveNotation.uciToSanOrRaw(fen, answer),
+                survives = MateIdeas.stillWorks(after, found),
+            )
+        }
+        if (bestLine == null) return MateIdea(found.prepSan, found.mateSan)
+        val (score, reply) = if (bestLine.pv.firstOrNull() == found.prepUci) {
+            bestLine.score to bestLine.pv.getOrNull(1)
+        } else {
+            val after = applyUciMove(fen, found.prepUci) ?: return null
+            val line = engineClient.analyse(after, ADVICE_LIMITS).firstOrNull() ?: return MateIdea(found.prepSan, found.mateSan)
+            ScoreFormat.negate(line.score) to line.pv.firstOrNull()
+        }
+        val afterPrep = applyUciMove(fen, found.prepUci)
+        return MateIdea(
+            found.prepSan,
+            found.mateSan,
+            scoreFromWhite = ScoreFormat.toWhitePerspective(score, mover),
+            lossVsBestCentipawns = ScoreFormat.centipawnLoss(bestLine.score, score),
+            replySan = reply?.let { r -> afterPrep?.let { MoveNotation.uciToSanOrRaw(it, listOf(r)).first() } },
+        )
+    }
+
     /** Удары соперника проверяются так же, но на доске с его очередью: оценку поэтому не показываем. */
     private suspend fun opponentAdvice(fen: String, features: FeatureSet, mover: Side): List<CheckedAdvice> {
         val opponent = mover.flip()
@@ -666,6 +711,8 @@ class PipelineOrchestrator(
         val diff = reasonDiffAnalyzer.analyse(fen, uci, bestLine.score)
         return HumanMove(
             lineSan = MoveNotation.uciToSanOrRaw(fen, line.pv.take(LINE_PLIES)),
+            lineUci = line.pv.take(LINE_PLIES),
+            scoreFromWhite = ScoreFormat.toWhitePerspective(line.score, NullMoveUtil.sideToMoveOf(fen)),
             lossVsBestCentipawns = loss,
             facts = diff.whyThisMove?.reasons?.flatMap { it.facts } ?: emptyList(),
             kind = kind,

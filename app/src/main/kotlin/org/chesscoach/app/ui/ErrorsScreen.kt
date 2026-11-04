@@ -64,6 +64,11 @@ private const val MAX_GAMES = 300
 private const val SHOWN_EXAMPLES = 3
 private const val DAY_MS = 24L * 60 * 60 * 1000
 
+private fun inWindow(games: List<GameSummary>, months: Int): List<GameSummary> {
+    val since = System.currentTimeMillis() - months * 30L * DAY_MS
+    return games.filter { it.createdAtEpochMs >= since }
+}
+
 fun errorWindowMonths(context: Context): Int =
     context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt(KEY_WINDOW, DEFAULT_WINDOW_MONTHS)
 
@@ -85,21 +90,34 @@ fun ErrorsScreen(
     val context = LocalContext.current
     var months by remember { mutableIntStateOf(errorWindowMonths(context)) }
     var games by remember { mutableStateOf<List<GameSummary>>(emptyList()) }
+    // Партии за год: из них же считаются окна поменьше и число партий на кнопках.
+    var yearGames by remember { mutableStateOf<List<GameSummary>?>(null) }
     var report by remember { mutableStateOf<ErrorReport?>(null) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var refresh by remember { mutableIntStateOf(0) }
     var queued by remember { mutableStateOf(false) }
 
-    LaunchedEffect(months, refresh) {
+    LaunchedEffect(refresh) {
         loading = true
         error = null
         catchingNonCancellation {
             val name = container.tokenStore.username() ?: container.lichessApi.account().username.also {
                 container.tokenStore.saveUsername(it)
             }
-            val since = System.currentTimeMillis() - months * 30L * DAY_MS
-            val loaded = container.lichessApi.recentGames(name, max = MAX_GAMES, sinceEpochMs = since)
+            val since = System.currentTimeMillis() - 12 * 30L * DAY_MS
+            yearGames = container.lichessApi.recentGames(name, max = MAX_GAMES, sinceEpochMs = since)
+        }.onFailure {
+            error = it.message ?: "Не удалось собрать сводку"
+            loading = false
+        }
+    }
+
+    LaunchedEffect(yearGames, months) {
+        val all = yearGames ?: return@LaunchedEffect
+        loading = true
+        catchingNonCancellation {
+            val loaded = inWindow(all, months)
             games = loaded
             report = buildErrorReport(container, context, loaded)
         }.onFailure { error = it.message ?: "Не удалось собрать сводку" }
@@ -130,7 +148,14 @@ fun ErrorsScreen(
                             months = value
                             saveErrorWindow(context, value)
                         },
-                        label = { Text(label) },
+                        label = {
+                            // Число партий в окне мелким: видно, есть ли что разбирать.
+                            val count = yearGames?.let { inWindow(it, value).size }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(label)
+                                count?.let { Text(" ($it)", style = MaterialTheme.typography.labelSmall, color = Palette.secondaryText) }
+                            }
+                        },
                     )
                 }
             }

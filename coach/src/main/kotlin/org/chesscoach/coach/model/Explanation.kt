@@ -129,6 +129,10 @@ data class HumanMove(
     val computerQuiet: Boolean = false,
     /** Человек сыграл бы то же, что компьютер: заметнее хода нет. */
     val sameAsComputer: Boolean = false,
+    /** Тот же вариант записью UCI: по нему строится строка кнопок на доске. */
+    val lineUci: List<String> = emptyList(),
+    /** Оценка после хода человека от лица белых. */
+    val scoreFromWhite: org.chesscoach.core.Score? = null,
 )
 
 /**
@@ -144,6 +148,24 @@ data class CaptureCheck(
     val replySan: String? = null,
     /** Что этим ответом берёт соперник. */
     val replyTakes: com.github.bhlangonijr.chesslib.PieceType? = null,
+)
+
+/**
+ * Мат в два своих хода: [prepSan], затем [mateSan], если соперник не помешает.
+ * Сыграть его можно не всегда, и об этом сказано тут же.
+ */
+data class MateIdea(
+    val prepSan: String,
+    val mateSan: String,
+    /** Сейчас шах: идею не сыграть, пока не ответил на него. */
+    val inCheck: Boolean = false,
+    /** Лучший ответ на шах и ответ соперника; [survives] — работает ли идея после них. */
+    val afterLineSan: List<String> = emptyList(),
+    val survives: Boolean = false,
+    /** Без шаха: оценка после подготовительного хода и ответ соперника по движку. */
+    val scoreFromWhite: org.chesscoach.core.Score? = null,
+    val lossVsBestCentipawns: Int = 0,
+    val replySan: String? = null,
 )
 
 /** Что делает ход, который человек находит сразу. Порядок — от самого заметного. */
@@ -241,6 +263,8 @@ sealed interface Section {
         val mates: List<String> = emptyList(),
         /** Взятия из [captures], проверенные движком. */
         val captureChecks: List<CaptureCheck> = emptyList(),
+        /** Мат в два своих хода, если он есть в позиции. */
+        val mateIdea: MateIdea? = null,
     ) : Section
 
     /**
