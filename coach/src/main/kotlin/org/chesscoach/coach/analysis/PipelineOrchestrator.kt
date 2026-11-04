@@ -6,6 +6,11 @@ import com.github.bhlangonijr.chesslib.Side
 import com.github.bhlangonijr.chesslib.Square
 import com.github.bhlangonijr.chesslib.move.Move
 import org.chesscoach.coach.model.CaptureCheck
+import org.chesscoach.coach.model.AllowedMate
+import org.chesscoach.coach.model.AllowedMateReason
+import org.chesscoach.coach.model.ProbedMove
+import org.chesscoach.coach.detectors.SeeCalculator
+import org.chesscoach.coach.detectors.boardAfter
 import org.chesscoach.coach.engine.CoachSearchLimits
 import org.chesscoach.coach.engine.EngineClient
 import org.chesscoach.coach.engine.NullMoveUtil
@@ -92,6 +97,15 @@ class PipelineOrchestrator(
         const val MAX_TEMPTING_CAPTURES = 2
         const val TEMPTING_LINE_INDEX = 99
         val ADVICE_LIMITS = CoachSearchLimits(movetimeMs = 250, multiPv = 1)
+
+        /** Короткая проверка хода чек-листа: шаха, взятия, ответа на угрозу. */
+        val PROBE_LIMITS = CoachSearchLimits(movetimeMs = 200, multiPv = 1)
+        const val MAX_PROBED_CHECKS = 4
+        const val MAX_PROBED_OPPONENT_CHECKS = 3
+        const val MAX_PROBED_CAPTURES = 3
+        const val MAX_COUNTER_THREATS = 2
+        const val MAX_COUNTER_PROBES = 3
+        const val MAX_COUNTER_MOVES = 2
     }
 
     /**
@@ -123,7 +137,9 @@ class PipelineOrchestrator(
         // 2. Нулевой ход: что соперник сделал бы, будь ход его. Считается до
         // сборки разделов, потому что угроза — это пункт внутри "моей позиции",
         // а не самостоятельная новость где-то ниже по тексту.
-        val threat = bestLine?.let { threatAnalyzer.analyse(fen, it.score) }
+        val nullMove = bestLine?.let { measureNullMoveThreat(engineClient, fen, it.score) }
+        val threat = bestLine?.let { threatAnalyzer.analyse(fen, nullMove) }
+        val probes = HashMap<String, Pair<Score, String?>>()
 
         // 3. Оценка позиции и расклад "моя позиция / моя атака" — без движка,
         // прямо из уже посчитанных признаков. Это первое, что читает человек,
@@ -131,12 +147,31 @@ class PipelineOrchestrator(
         bestLine?.let { lineAnalyzer.analyse(fen, it) }?.let { sections += it }
         sections += PositionAssessor.assess(fen, featuresBefore, sideToMove, opening)
         val previous = previousMove(previousFen, previousMoveUci, fen, featuresBefore, sideToMove)
-        sections += myPositionSection(fen, featuresBefore, sideToMove, threat, opponentAdvice(fen, featuresBefore, sideToMove), previous)
+        val position = myPositionSection(fen, featuresBefore, sideToMove, threat, opponentAdvice(fen, featuresBefore, sideToMove), previous)
+            .let { mine ->
+                // Шахи соперника проверяются на доске с его очередью, против его лучшего хода там.
+                val flipped = NullMoveUtil.flipSideToMove(fen)
+                val opponentChecks = if (flipped == null || nullMove == null) {
+                    emptyList()
+                } else {
+                    probedChecks(flipped, nullMove.bestLine, listOf(nullMove.bestLine), ownScore = false, cache = probes, limit = MAX_PROBED_OPPONENT_CHECKS)
+                }
+                mine.copy(probedChecks = opponentChecks, mateGuards = MateGuards.find(fen, sideToMove.flip()))
+            }
+        sections += position
         sections += myAttackSection(fen, featuresBefore, sideToMove, ownAdvice(fen, featuresBefore, sideToMove, bestLine), bestLine)
             .let { attack ->
+                val captureChecks = captureChecks(fen, attack.captures, sideToMove, bestLine)
+                val covered = captureChecks.map { it.uci }.toSet()
+                val (threatNames, counter) = counterMoves(fen, threat, position.loosePieces, bestLine, mainLines, probes)
                 attack.copy(
-                    captureChecks = captureChecks(fen, attack.captures, sideToMove, bestLine),
+                    captureChecks = captureChecks,
                     mateIdea = mateIdea(fen, sideToMove, bestLine),
+                    probedChecks = probedChecks(fen, bestLine, mainLines, ownScore = true, cache = probes),
+                    probedCaptures = probedCaptures(fen, bestLine, mainLines, covered, probes),
+                    counterMoves = counter,
+                    counterThreats = threatNames,
+                    mateGuards = MateGuards.find(fen, sideToMove),
                 )
             }
 
@@ -224,6 +259,7 @@ class PipelineOrchestrator(
                         // значило бы пугать читателя на ровном месте.
                         refutationSan = playedDiff.replyMoveSan.takeIf { playedMoveUci != bestMoveUci },
                         punishment = if (playedMoveUci == bestMoveUci) emptyList() else playedDiff.opponentGains,
+                        allowedMate = if (playedMoveUci == bestMoveUci) null else allowedMate(fen, playedMoveUci, bestLine.score, playedScore),
                     )
                     afterMoveSection(fen, playedSan, playedPv, playedScore, sideToMove)?.let { sections += it }
                 }
@@ -292,7 +328,7 @@ class PipelineOrchestrator(
         threat: ThreatFact?,
         advice: List<CheckedAdvice>,
         previous: PreviousMove?,
-    ): Section {
+    ): Section.MyPosition {
         val opponent = mover.flip()
         val kingSafety = features.pick<KingSafetyFact>().filter { it.kingSide == mover } +
             features.favouring(opponent).filter(::isActiveIdea)
@@ -536,6 +572,8 @@ class PipelineOrchestrator(
                 lossVsBestCentipawns = ScoreFormat.centipawnLoss(bestLine.score, score),
                 replySan = reply?.let { MoveNotation.uciToSanOrRaw(after, listOf(it)).first() },
                 replyTakes = replyTakes,
+                uci = uci,
+                replyMates = reply != null && MatingMoves.gives(after, reply),
             )
         }
     }
@@ -578,6 +616,192 @@ class PipelineOrchestrator(
             replySan = reply?.let { r -> afterPrep?.let { MoveNotation.uciToSanOrRaw(it, listOf(r)).first() } },
         )
     }
+
+    /**
+     * Ход [uci] из [fen], проверенный движком: оценка после него и лучший ответ.
+     * [best] — оценка лучшего хода от лица ходящего. Ходы из основного поиска
+     * движку второй раз не отдаём. [ownScore] — показывать ли оценку: у ходов
+     * соперника на доске с пропущенным ходом её нет.
+     */
+    private suspend fun probe(
+        fen: String,
+        uci: String,
+        best: Score,
+        lines: List<EngineLine>,
+        ownScore: Boolean,
+        cache: MutableMap<String, Pair<Score, String?>>,
+        againstSan: String? = null,
+    ): ProbedMove? {
+        val after = applyUciMove(fen, uci) ?: return null
+        val mover = NullMoveUtil.sideToMoveOf(fen)
+        val key = fen + " " + uci
+        val (score, reply) = cache[key] ?: run {
+            val known = lines.firstOrNull { it.pv.firstOrNull() == uci }
+            val found = if (known != null) {
+                known.score to known.pv.getOrNull(1)
+            } else {
+                val line = engineClient.analyse(after, PROBE_LIMITS).firstOrNull() ?: return null
+                ScoreFormat.negate(line.score) to line.pv.firstOrNull()
+            }
+            found.also { cache[key] = it }
+        }
+        val afterBoard = Board().also { it.loadFromFen(after) }
+        val replyMove = reply?.takeIf { it.length >= 4 }?.let { runCatching { Move(it, mover.flip()) }.getOrNull() }
+        val loss = ScoreFormat.centipawnLoss(best, score)
+        // Фигуру хода тут же выгодно забирают: это не рабочий ход, разве что жертва,
+        // которую движок сам ставит лучшей. При проигранной позиции все ходы "равны", и тогда тоже нет.
+        val refuted = replyMove != null && replyMove.to.value().lowercase() == uci.substring(2, 4) &&
+            (SeeCalculator.evaluateMove(afterBoard, replyMove) ?: 0) >= SeeCalculator.WINNING_MIN_CP
+        val lost = best is Score.Mate && best.movesToMate < 0
+        val works = loss < ADVICE_MAX_LOSS_CP && (!refuted || (ownScore && loss == 0 && !lost))
+        return ProbedMove(
+            san = MoveNotation.uciToSanOrRaw(fen, listOf(uci)).first(),
+            uci = uci,
+            works = works,
+            scoreFromWhite = if (ownScore) ScoreFormat.toWhitePerspective(score, mover) else null,
+            lossVsBestCentipawns = loss,
+            replySan = reply?.let { MoveNotation.uciToSanOrRaw(after, listOf(it)).first() },
+            replyPiece = replyMove?.let { afterBoard.getPiece(it.from).pieceType },
+            replyFrom = replyMove?.from,
+            replyTakes = replyMove?.let { afterBoard.getPiece(it.to) }?.takeIf { it != Piece.NONE }?.pieceType,
+            replyMates = reply != null && MatingMoves.gives(after, reply),
+            fenBefore = fen,
+            againstSan = againstSan,
+        )
+    }
+
+    /**
+     * Сыгранный ход пропускает мат: в один ход — с причиной по доске, дальше —
+     * по оценке движка. Если мат был неизбежен и при лучшем ходе, пропускать нечего.
+     */
+    private fun allowedMate(fen: String, playedUci: String, best: Score, played: Score?): AllowedMate? {
+        if (best is Score.Mate && best.movesToMate < 0) return null
+        MateGuards.allowed(fen, playedUci)?.let { return it }
+        val mate = played as? Score.Mate ?: return null
+        if (mate.movesToMate >= 0) return null
+        return AllowedMate("", -mate.movesToMate, AllowedMateReason.OTHER)
+    }
+
+    /** Рабочие первыми, по оценке; с "но" — после, от меньшей потери к большей. */
+    private fun ranked(moves: List<ProbedMove>): List<ProbedMove> =
+        moves.sortedWith(compareBy<ProbedMove>({ !it.works }, { it.lossVsBestCentipawns }))
+
+    /**
+     * Шахи [side] из [fen], проверенные движком. Для своей стороны [best] —
+     * оценка лучшего хода; для соперника — лучший ход на доске с его очередью.
+     */
+    private suspend fun probedChecks(
+        fen: String,
+        best: EngineLine?,
+        lines: List<EngineLine>,
+        ownScore: Boolean,
+        cache: MutableMap<String, Pair<Score, String?>>,
+        limit: Int = MAX_PROBED_CHECKS,
+    ): List<ProbedMove> {
+        if (best == null) return emptyList()
+        val board = Board()
+        if (!runCatching { board.loadFromFen(fen) }.isSuccess) return emptyList()
+        val side = board.sideToMove
+        val known = lines.mapNotNull { it.pv.firstOrNull() }.toSet()
+        val checks = runCatching {
+            board.legalMoves().filter { move ->
+                val after = org.chesscoach.coach.detectors.boardAfter(board, side, move)
+                after.isKingAttacked && !after.isMated
+            }
+        }.getOrDefault(emptyList())
+            .sortedWith(compareBy({ it.toString() !in known }, { -SeeCalculator.value(board.getPiece(it.to).pieceType ?: com.github.bhlangonijr.chesslib.PieceType.NONE) }))
+            .take(limit)
+        return ranked(checks.mapNotNull { probe(fen, it.toString(), best.score, lines, ownScore, cache) })
+    }
+
+    /** Свои взятия, которых нет среди висящих фигур: берём те, что не уступают лучшему ходу. */
+    private suspend fun probedCaptures(
+        fen: String,
+        bestLine: EngineLine?,
+        lines: List<EngineLine>,
+        covered: Set<String>,
+        cache: MutableMap<String, Pair<Score, String?>>,
+    ): List<ProbedMove> {
+        if (bestLine == null) return emptyList()
+        val board = Board()
+        if (!runCatching { board.loadFromFen(fen) }.isSuccess) return emptyList()
+        val known = lines.mapNotNull { it.pv.firstOrNull() }.toSet()
+        val captures = runCatching { board.legalMoves() }.getOrDefault(emptyList())
+            .filter { board.getPiece(it.to) != Piece.NONE && it.toString() !in covered }
+            .filter { it.promotion == Piece.NONE || it.promotion.pieceType == com.github.bhlangonijr.chesslib.PieceType.QUEEN }
+            .sortedWith(compareBy({ it.toString() !in known }, { -SeeCalculator.value(board.getPiece(it.to).pieceType) }))
+            .take(MAX_PROBED_CAPTURES)
+        return ranked(captures.mapNotNull { probe(fen, it.toString(), bestLine.score, lines, true, cache) }).filter { it.works }
+    }
+
+    /**
+     * Противодействие плану соперника: ходы против одной-двух главных угроз —
+     * угрозы нулевого хода, взятия самой дорогой моей фигуры, мата. Ход
+     * отвечает на угрозу, если после него её не сыграть или она уже ничего не
+     * выигрывает. Проверяет движок; рабочие первыми.
+     */
+    private suspend fun counterMoves(
+        fen: String,
+        threat: ThreatFact?,
+        loose: List<Fact>,
+        bestLine: EngineLine?,
+        lines: List<EngineLine>,
+        cache: MutableMap<String, Pair<Score, String?>>,
+    ): Pair<List<String>, List<ProbedMove>> {
+        if (bestLine == null) return emptyList<String>() to emptyList()
+        val board = Board()
+        if (!runCatching { board.loadFromFen(fen) }.isSuccess) return emptyList<String>() to emptyList()
+        if (runCatching { board.isKingAttacked }.getOrDefault(true)) return emptyList<String>() to emptyList()
+        val mover = board.sideToMove
+        val opponent = mover.flip()
+        val flipped = NullMoveUtil.flipSideToMove(fen) ?: return emptyList<String>() to emptyList()
+        val threats = ArrayList<String>()
+        threat?.let { threats += it.opponentMoveUci }
+        val opponentBoard = Board().also { it.loadFromFen(flipped) }
+        opponentBoard.legalMoves().filter { boardAfter(opponentBoard, opponent, it).isMated }.forEach { threats += it.toString() }
+        loose.filterIsInstance<HangingPieceFact>().maxByOrNull { it.lossCentipawns }?.let { fact ->
+            fact.firstAttacker?.let { threats += it.value().lowercase() + fact.square.value().lowercase() }
+        }
+        val main = threats.distinct().take(MAX_COUNTER_THREATS)
+        if (main.isEmpty()) return emptyList<String>() to emptyList()
+        val names = main.map { MoveNotation.uciToSanOrRaw(flipped, listOf(it)).first() }
+
+        val known = lines.mapNotNull { it.pv.firstOrNull() }.toSet()
+        val threatened = main.mapNotNull { runCatching { Square.valueOf(it.substring(2, 4).uppercase()) }.getOrNull() }.toSet()
+        val attackers = main.mapNotNull { runCatching { Square.valueOf(it.substring(0, 2).uppercase()) }.getOrNull() }.toSet()
+        val candidates = board.legalMoves().mapNotNull { move ->
+            val answered = main.indexOfFirst { answers(board, move, it, opponent) }
+            if (answered < 0) null else move to answered
+        }.sortedWith(
+            compareBy(
+                { it.second },
+                { it.first.toString() !in known },
+                { !(it.first.from in threatened || it.first.to in attackers) },
+            ),
+        ).take(MAX_COUNTER_PROBES)
+        val probed = candidates.mapNotNull { (move, index) ->
+            probe(fen, move.toString(), bestLine.score, lines, true, cache, againstSan = names[index])
+        }
+        val good = ranked(probed).filter { it.works }.take(MAX_COUNTER_MOVES)
+        return names to good.ifEmpty { ranked(probed).take(1) }
+    }
+
+    /** Снимает ли ход [move] угрозу [threatUci]: её не сыграть, мата нет или взятие ничего не даёт. */
+    private fun answers(board: Board, move: Move, threatUci: String, opponent: Side): Boolean = runCatching {
+        val after = boardAfter(board, board.sideToMove, move)
+        val threat = after.legalMoves().firstOrNull { it.toString() == threatUci } ?: return@runCatching true
+        val afterThreat = boardAfter(after, opponent, threat)
+        if (afterThreat.isMated) return@runCatching false
+        val wasCapture = board.getPiece(threat.to) != Piece.NONE
+        val victim = after.getPiece(threat.to)
+        if (wasCapture) {
+            if (victim == Piece.NONE) return@runCatching true
+            val gain = SeeCalculator.evaluateMove(after, threat) ?: return@runCatching true
+            return@runCatching gain < SeeCalculator.WINNING_MIN_CP
+        }
+        // Тихая угроза: снята, если ходившую фигуру тут же выгодно забирают.
+        afterThreat.legalMoves().any { it.to == threat.to && (SeeCalculator.evaluateMove(afterThreat, it) ?: 0) >= SeeCalculator.WINNING_MIN_CP }
+    }.getOrDefault(false)
 
     /** Удары соперника проверяются так же, но на доске с его очередью: оценку поэтому не показываем. */
     private suspend fun opponentAdvice(fen: String, features: FeatureSet, mover: Side): List<CheckedAdvice> {
@@ -689,6 +913,8 @@ class PipelineOrchestrator(
             .filter { it.pv.firstOrNull() != null && it.pv.first() != bestUci }
             .distinctBy { it.pv.first() }
             .filter { ScoreFormat.centipawnLoss(bestLine.score, it.score) <= CoachThresholds.HUMAN_MOVE_MAX_LOSS_CP }
+            // Мат на доске человек и сыграет: ход без мата или с более долгим матом ему не замена.
+            .filter { line -> !slowerThanMate(bestLine.score, line.score) }
         val natural = close
             .map { it to naturalKind(fen, it.pv.first()) }
             .filter { (_, kind) -> kind.ordinal < bestKind.ordinal }
@@ -718,6 +944,11 @@ class PipelineOrchestrator(
             kind = kind,
             computerQuiet = bestKind == NaturalMove.OTHER,
         )
+    }
+
+    private fun slowerThanMate(best: Score, other: Score): Boolean {
+        if (best !is Score.Mate || best.movesToMate <= 0) return false
+        return other !is Score.Mate || other.movesToMate <= 0 || other.movesToMate > best.movesToMate
     }
 
     /** Чем ход бросается в глаза: взятие, шах, вывод лёгкой фигуры с первой горизонтали. */

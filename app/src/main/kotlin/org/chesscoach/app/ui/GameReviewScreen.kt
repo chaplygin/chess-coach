@@ -272,10 +272,34 @@ fun GameReviewScreen(
     val coachVariations = remember(explanation) { explanation?.let(Variations::of).orEmpty() }
     val playedBest = explanation?.section<Section.PlayedMove>()?.matchesBest == true
 
+    // Одна линия на позицию: на позиции после сыгранного хода первая строка —
+    // вариант тренера, вторая — другой ход движка.
+    val coachLine = remember(explanation, displayedFen) {
+        val played = explanation?.section<Section.PlayedMove>()
+        val ply = positions.getOrNull(currentPly)
+        if (played == null || ply == null || ply.fenAfter != displayedFen || played.lineUci.size < 2) {
+            null
+        } else {
+            val rest = played.lineUci.drop(1)
+            val fens = MoveNotation.fensAfter(displayedFen, rest)
+            val score = explanation?.section<Section.AfterMove>()?.scoreFromWhite ?: played.scoreAfterFromWhite
+            if (fens.isEmpty() || score == null) {
+                null
+            } else {
+                EngineView(score, MoveNotation.uciToSanOrRaw(displayedFen, rest.take(fens.size)), rest.first(), displayedFen, fens)
+            }
+        }
+    }
+    // Лучший ответ и сама позиция — одно число: оценка тренера главнее короткого расчёта.
+    LaunchedEffect(coachLine) { coachLine?.let { stepScores[it.fens.first()] = it.scoreFromWhite } }
+    val headerLines = remember(coachLine, engineLines) {
+        if (coachLine == null) engineLines else listOf(coachLine) + engineLines.filter { it.firstUci != coachLine.firstUci }.take(1)
+    }
+
     // Оценки под ходами вариантов: каждую позицию коротко считает движок,
     // уже посчитанные не трогаем. Пока думает тренер, движок его.
-    val stepFens = remember(engineLines, coachVariations) {
-        (engineLines.flatMap { it.fens } + coachVariations.flatMap { it.fens }).distinct()
+    val stepFens = remember(headerLines, coachVariations) {
+        (headerLines.flatMap { it.fens } + coachVariations.flatMap { it.fens }).distinct()
     }
     LaunchedEffect(stepFens, thinking) {
         if (thinking || stepFens.isEmpty()) return@LaunchedEffect
@@ -308,14 +332,20 @@ fun GameReviewScreen(
             modifier = Modifier.height(boardSize).width(boardSize + EVAL_BAR_WIDTH + EVAL_BAR_GAP),
             horizontalArrangement = Arrangement.spacedBy(EVAL_BAR_GAP),
         ) {
-            val lastMove = when {
-                coachVariationFen != null -> null
-                lineActive && lineCursor >= 0 -> line[lineCursor].uci
-                lineActive -> null
-                else -> positions.getOrNull(currentPly)?.uci
+            // Подсветка всегда: ход, после которого позиция на доске, и ход перед ним —
+            // в партии, в своём варианте и на шагах вариантов тренера.
+            val gameMove = positions.getOrNull(currentPly)?.uci
+            val gamePrevious = positions.getOrNull(currentPly - 1)?.uci
+            val variationShown = coachVariationFen?.let { shown ->
+                coachVariations.firstNotNullOfOrNull { v -> v.fens.indexOf(shown).takeIf { it >= 0 }?.let { v to it } }
             }
-            // Прошлый ход соперника — только на позиции партии: в варианте он другой.
-            val previousMove = positions.getOrNull(currentPly - 1)?.uci?.takeIf { coachVariationFen == null && !lineActive }
+            val (lastMove, previousMove) = when {
+                coachVariationFen != null -> variationShown?.let { (v, i) ->
+                    v.uci.getOrNull(i) to (if (i > 0) v.uci.getOrNull(i - 1) else gamePrevious)
+                } ?: (null to null)
+                lineActive && lineCursor >= 0 -> line[lineCursor].uci to (if (lineCursor > 0) line[lineCursor - 1].uci else gameMove)
+                else -> gameMove to gamePrevious
+            }
             ChessBoard(
                 fen = displayedFen,
                 modifier = Modifier.width(boardSize),
@@ -439,7 +469,7 @@ fun GameReviewScreen(
                         modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        EngineLinesHeader(engineLines, stepScores, GameEnd.of(displayedFen))
+                        EngineLinesHeader(headerLines, stepScores, GameEnd.of(displayedFen))
                         underBoard()
                         ScanProgress(scan)
                         graph()
@@ -453,7 +483,7 @@ fun GameReviewScreen(
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 header()
-                EngineLinesHeader(engineLines, stepScores, GameEnd.of(displayedFen))
+                EngineLinesHeader(headerLines, stepScores, GameEnd.of(displayedFen))
                 board(this@BoxWithConstraints.maxWidth - 24.dp - EVAL_BAR_WIDTH - EVAL_BAR_GAP)
                 Column(
                     modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
@@ -597,7 +627,7 @@ private fun EngineLinesHeader(lines: List<EngineView>, scores: Map<String, Score
                 )
                 Text(
                     MoveNotation.numbered(view.startFen, view.sanLine).mapIndexed { step, move ->
-                        MoveNotation.figurine(move) + (view.fens.getOrNull(step)?.takeIf { step > 0 }?.let(scores::get)?.let { " (" + ScoreFormat.short(it) + ")" } ?: "")
+                        MoveNotation.figurine(move) + (view.fens.getOrNull(step)?.let(scores::get)?.let { " (" + ScoreFormat.short(it) + ")" } ?: "")
                     }.joinToString(" "),
                     style = MaterialTheme.typography.bodySmall,
                     maxLines = 1,

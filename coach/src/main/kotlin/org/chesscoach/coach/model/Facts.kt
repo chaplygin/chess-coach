@@ -103,6 +103,8 @@ data class HangingPieceFact(
     val recaptureLineSan: List<String> = emptyList(),
     /** Фигура, которой пришлось бы брать обратно. */
     val recapturer: Piece? = null,
+    /** Защитник есть, но первое взятие с шахом: взять обратно сразу нельзя. */
+    val capturedWithCheck: Boolean = false,
 ) : Fact
 
 /**

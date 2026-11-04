@@ -1,6 +1,7 @@
 package org.chesscoach.app.ui
 
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -52,6 +53,17 @@ fun AppRoot(redirect: Uri?, onRedirectHandled: () -> Unit) {
     // Сам апдейтер помнит, что уже проверял: поворот экрана не повторит запрос.
     LaunchedEffect(Unit) { container.updater.checkOnStartup() }
     UpdateDialog(container.updater)
+
+    // Системная кнопка "Назад" ведёт туда же, куда кнопка "Назад" на экране.
+    // На главном экране и входе она обычным образом закрывает приложение.
+    BackHandler(enabled = screen != Screen.MENU && screen != Screen.LOGIN) {
+        screen = when (screen) {
+            Screen.RECAP -> Screen.GAMES
+            Screen.REVIEW -> reviewBack
+            Screen.ENGINE -> Screen.SETTINGS
+            else -> Screen.MENU
+        }
+    }
 
     when (screen) {
         Screen.LOGIN -> LoginScreen(

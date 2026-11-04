@@ -43,7 +43,11 @@ class HangingDetector : Detector {
                 // нём: назвать причину ("бьёт пешка e4") потом будет неоткуда —
                 // факт может дожить до текста, относящегося к другой доске.
                 val first = SeeCalculator.firstCapture(board, square, attacker)
+                // На доске без шахующих фигур линии могут открыться: свой конь g3
+                // закрывал ладье g8 путь к g1. Взятие должно быть видно и на настоящей доске.
+                if (board !== original && first != null && !AttackMap.attackersOf(original, square, attacker).contains(first.from)) continue
                 val squares = listOfNotNull(square, first?.from)
+                val withCheck = first != null && !first.recaptureExists && capturesWithCheck(board, square, attacker, first.from)
 
                 facts += HangingPieceFact(
                     square = square,
@@ -59,6 +63,7 @@ class HangingDetector : Detector {
                     defended = first?.recaptureExists ?: false,
                     recaptureLineSan = SeeCalculator.recaptureLineSan(board, square, attacker),
                     recapturer = recapturerOf(board, square, attacker),
+                    capturedWithCheck = withCheck,
                 )
             }
         }
@@ -77,6 +82,15 @@ class HangingDetector : Detector {
         }
         return calm
     }
+
+    /**
+     * Взять обратно нечем только потому, что первое взятие даёт шах: защитник
+     * на доске есть. Тогда "защиты нет" — неправда, правда — "взятие с шахом".
+     */
+    private fun capturesWithCheck(board: Board, square: Square, attacker: Side, from: Square): Boolean = runCatching {
+        val after = boardAfter(board, attacker, Move(from, square))
+        after.isKingAttacked && AttackMap.attackersOf(after, square, attacker.flip()).any { after.getPiece(it).pieceType != PieceType.KING }
+    }.getOrDefault(false)
 
     /** Какой фигурой пришлось бы брать обратно: именно она и теряется, если размен продолжат. */
     private fun recapturerOf(board: Board, square: Square, attacker: Side): Piece? {

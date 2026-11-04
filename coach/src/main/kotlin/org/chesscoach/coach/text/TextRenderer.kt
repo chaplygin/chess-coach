@@ -8,6 +8,10 @@ import com.github.bhlangonijr.chesslib.Square
 import org.chesscoach.coach.model.BackRankFact
 import org.chesscoach.coach.model.BadBishopFact
 import org.chesscoach.coach.model.CaptureCheck
+import org.chesscoach.coach.model.ProbedMove
+import org.chesscoach.coach.model.MateGuard
+import org.chesscoach.coach.model.AllowedMate
+import org.chesscoach.coach.model.AllowedMateReason
 import org.chesscoach.coach.analysis.explainsDanger
 import org.chesscoach.coach.model.CenterControlFact
 import org.chesscoach.coach.model.CheckedAdvice
@@ -209,6 +213,35 @@ object TextRenderer {
                 played.centipawnLoss < LOSS_SHOWN_CP -> classificationLabel(played.classification)
                 else -> classificationLabel(played.classification) + ", " + lossPhrase(played.centipawnLoss)
             }
+        }
+    }
+
+    /** "пропускает мат: Qxh2#" — в скобки заголовка хода. */
+    private fun allowedMateMark(mate: AllowedMate): String =
+        if (mate.movesToMate == 1 && mate.mateSan.isNotEmpty()) "пропускает мат: " + SanRuFormatter.move(mate.mateSan)
+        else "пропускает мат в " + mate.movesToMate + " " + movesWord(mate.movesToMate)
+
+    /**
+     * Почему ход пропускает мат: "g3 перекрывает слону f4 защиту поля h2 — чёрные
+     * ставят мат Qxh2#." Защитника называем поимённо: его и надо было беречь.
+     */
+    private fun allowedMateSentence(mate: AllowedMate, playedSan: String, mover: Side): String {
+        val played = SanRuFormatter.move(playedSan)
+        val opponent = SideLexicon.name(mover.flip())
+        val san = SanRuFormatter.move(mate.mateSan)
+        val piece = mate.defenderPiece
+        val from = mate.defender
+        val target = mate.target
+        if (mate.movesToMate > 1 || mate.mateSan.isEmpty()) {
+            return "После $played у " + SideLexicon.name(mover.flip(), GrammaticalCase.GENITIVE) + " форсированный мат в " + mate.movesToMate + " " + movesWord(mate.movesToMate) + "."
+        }
+        return when {
+            mate.reason == AllowedMateReason.MOVES_DEFENDER && piece != null && from != null && target != null ->
+                "$played уводит " + PieceLexicon.name(piece, GrammaticalCase.ACCUSATIVE) + " " + sq(from) + " с защиты поля " + sq(target) + " — $opponent ставят мат $san."
+            mate.reason == AllowedMateReason.BLOCKS_DEFENDER && piece != null && from != null && target != null ->
+                "$played перекрывает " + PieceLexicon.name(piece, GrammaticalCase.DATIVE) + " " + sq(from) + " защиту поля " + sq(target) + " — $opponent ставят мат $san."
+            mate.reason == AllowedMateReason.IGNORES_THREAT -> "$played не защищает от угрозы $san — $opponent ставят мат."
+            else -> "После $played $opponent ставят мат $san."
         }
     }
 
@@ -552,7 +585,7 @@ object TextRenderer {
         ) {
             return ""
         }
-        val phrase = section.punishment
+        val phrase = section.allowedMate?.let(::allowedMateMark) ?: section.punishment
             .sortedBy(::damageRank)
             .firstNotNullOfOrNull { runCatching { damagePhrase(it) }.getOrNull() }
             ?: lossPhrase(section.centipawnLoss)
@@ -587,15 +620,17 @@ object TextRenderer {
         is Section.Prophylaxis -> BULLET + prophylaxisBody(section.fact, pool)
         is Section.Trap -> BULLET + trapBody(section, explanation.sideToMove)
         is Section.Alternatives -> alternativesBody(section)
-        is Section.AfterMove -> afterMoveBody(section, glossary)
+        is Section.AfterMove -> afterMoveBody(section, glossary, explanation)
     }
 
     /** "Оценка после хода Bxg5: −4.5." и почему — тем же разбором варианта, что и до хода. */
-    private fun afterMoveBody(section: Section.AfterMove, glossary: Glossary): String? {
+    private fun afterMoveBody(section: Section.AfterMove, glossary: Glossary, explanation: PositionExplanation): String? {
         val score = section.scoreFromWhite ?: return null
         val head = "Оценка после хода " + SanRuFormatter.move(section.moveSan) + ": " + ScoreFormat.short(score) + "."
+        val mate = explanation.section<Section.PlayedMove>()?.allowedMate?.takeIf { it.movesToMate == 1 }
+            ?.let { allowedMateSentence(it, section.moveSan, explanation.sideToMove) }
         val reason = section.reason?.let { evalReasonBody(it, glossary, withMaterial = true) }.orEmpty()
-        return bulleted(listOf(head) + reason)
+        return bulleted(listOf(head) + listOfNotNull(mate) + reason)
     }
 
     // ——— Пункты ———
@@ -890,13 +925,34 @@ object TextRenderer {
         } + listOfNotNull(threatItem.takeIf { threatIsCapture && targetIndex < 0 })
 
         val previous = section.previousMove?.let { previousMoveItem(it, forkedSquares, glossary) }
+        // Взятие соперника заодно с ударом: "Bxc2 заодно нападает на ладью d1".
+        val flipped = org.chesscoach.coach.engine.NullMoveUtil.flipSideToMove(explanation.fen)
+        val capturesWithBlows = captures.mapIndexed { index, item ->
+            val fact = looseItems.getOrNull(index)?.first as? HangingPieceFact
+            val from = fact?.firstAttacker
+            if (flipped == null || fact == null || from == null) return@mapIndexed item
+            val uci = from.value().lowercase() + fact.square.value().lowercase()
+            val blows = MoveEffects.attacks(flipped, uci)
+            if (blows.isEmpty()) {
+                item
+            } else {
+                val san = MoveNotation.uciToSanOrRaw(flipped, listOf(uci)).first()
+                item.copy(children = listOf(Item("Взятие " + SanRuFormatter.move(san) + " заодно " + blows.joinToString(" и ") + ".")) + item.children)
+            }
+        }
+        val checks = if (section.probedChecks.isNotEmpty()) {
+            probedCheckItems(section.probedChecks, mover.flip(), withScore = false)
+        } else {
+            items(checksSentences(section.checks))
+        }
         return itemLines(listOfNotNull(previous)).plus(
             checkList(
                 mates = items(mateSentences(section.mates)) +
                     items(statementsFor(backRank, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON)) +
                     listOfNotNull(threatItem.takeIf { threatIsMate && section.mates.isEmpty() }) +
-                    items(checksSentences(section.checks)),
-                captures = captures,
+                    section.mateGuards.filter { guard -> section.mates.none { it == guard.mateSan } }.map { Item(guardSentence(it, mine = true)) } +
+                    checks,
+                captures = capturesWithBlows,
                 active = listOfNotNull(threatItem.takeUnless { threatIsMate || threatIsCapture }) +
                     adviceItems(section.advice, glossary, memory, forkedSquares, best = null, mover = mover.flip()) +
                     items(statementsFor(section.kingSafety, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON)) +
@@ -1026,17 +1082,35 @@ object TextRenderer {
             Item("$whom шах " + russianList(it.map { (square, type) -> PieceLexicon.name(type, GrammaticalCase.INSTRUMENTAL) + " " + sq(square) }) +
                 ": сначала ответить на него — закрыться, взять шахующую фигуру или уйти королём.")
         }
+        val checks = if (section.probedChecks.isNotEmpty()) {
+            probedCheckItems(section.probedChecks, mover, withScore = true)
+        } else {
+            items(checksSentences(section.checks))
+        }
+        val shownCaptures = section.captureChecks.map { it.uci }.toSet()
+        val extraCaptures = section.probedCaptures.filter { it.uci !in shownCaptures }.map { probed ->
+            val victim = runCatching {
+                Board().also { it.loadFromFen(probed.fenBefore) }.getPiece(Square.valueOf(probed.uci.substring(2, 4).uppercase())).pieceType
+            }.getOrNull()
+            val what = victim?.let { " — берёт " + PieceLexicon.name(it, GrammaticalCase.ACCUSATIVE) + " " + probed.uci.substring(2, 4) }.orEmpty()
+            Item(
+                SanRuFormatter.move(probed.san) + what + probed.scoreFromWhite?.let { " (оценка " + ScoreFormat.short(it) + ")" }.orEmpty() + ".",
+                weight = victim?.let(SeeCalculator::value) ?: 0,
+            )
+        }
         return checkList(
             mates = listOfNotNull(given) + items(mateSentences(section.mates)) +
                 items(engineMates.filterIsInstance<MateFact>().map { "Есть форсированный мат в ${it.movesToMate} ${movesWord(it.movesToMate)}." }) +
                 items(statementsFor(mateFacts, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON)) +
-                items(checksSentences(section.checks)),
-            captures = captures,
+                section.mateGuards.filter { guard -> section.mates.none { it == guard.mateSan } }.map { Item(guardSentence(it, mine = false)) } +
+                checks,
+            captures = captures + extraCaptures,
             active = listOfNotNull(section.mateIdea?.let { mateIdeaItem(it, mover) }) +
                 adviceItems(section.advice, glossary, memory, forkedSquares, explanation.scoreFromWhite, mover) +
                 items(statementsFor(section.activity, forkedSquares, glossary, memory, MAX_FACTS_PER_REASON)) +
                 items(planSentences(section.plan, glossary, forkedSquares, targetSide = explanation.sideToMove.flip())),
             exchanges = exchangeItems(section.exchanges, forkedSquares, glossary, memory),
+            counter = counterItems(section, mover),
         ).plus(myIdeaLine(assessment?.developmentPlan, assessment?.ideas.orEmpty(), checkers.isNotEmpty(), section.mateIdea))
             .joinToString(System.lineSeparator())
     }
@@ -1102,6 +1176,10 @@ object TextRenderer {
             return item.copy(text = text)
         }
         val reply = check.replySan ?: return item.copy(weight = item.weight - BAD_ADVICE_PENALTY)
+        if (check.replyMates) {
+            val mated = "Но после " + SanRuFormatter.move(check.moveSan) + " " + SideLexicon.name(mover.flip()) + " отвечают матом " + SanRuFormatter.move(reply) + "."
+            return item.copy(children = item.children + Item(mated), weight = item.weight - BAD_ADVICE_PENALTY)
+        }
         val takes = check.replyTakes?.let { " и берут " + PieceLexicon.name(it, GrammaticalCase.ACCUSATIVE) }.orEmpty()
         val but = "Но после " + SanRuFormatter.move(check.moveSan) + " " + SideLexicon.name(mover.flip()) + " отвечают " +
             SanRuFormatter.move(reply) + takes + score?.let { " ($it)" }.orEmpty() + "."
@@ -1162,13 +1240,77 @@ object TextRenderer {
         captures: List<Item>,
         active: List<Item>,
         exchanges: List<Item>,
+        counter: List<Item>? = null,
     ): List<String> = itemLines(
-        listOf(
+        listOfNotNull(
             checkItem("1. Шахи и маты", mates, emptyList()),
             checkItem("2. Взятия", captures.sortedByDescending { it.weight }, exchanges),
             checkItem("3. Активные ходы", active.sortedByDescending { it.weight }, emptyList()),
+            counter?.let { checkItem("4. Противодействие плану соперника", it, emptyList()) },
         ),
     )
+
+    /**
+     * Шахи, проверенные движком: работающие с оценкой, проигрывающие — с "но" и
+     * ответом соперника. У шахов соперника оценки нет: доска там с пропущенным ходом.
+     */
+    private fun probedCheckItems(checks: List<ProbedMove>, side: Side, withScore: Boolean): List<Item> = checks.map { check ->
+        val score = check.scoreFromWhite?.takeIf { withScore }?.let { "оценка " + ScoreFormat.short(it) }
+        if (check.works) {
+            Item("Шах " + SanRuFormatter.move(check.san) + score?.let { " ($it)" }.orEmpty() + ".")
+        } else {
+            Item("Шах " + SanRuFormatter.move(check.san) + ", но " + replyPhrase(check, side) + score?.let { " ($it)" }.orEmpty() + ".", weight = -BAD_ADVICE_PENALTY)
+        }
+    }
+
+    /** "слон f5 берёт ладью: Bxd7", "в ответ мат Qxh7#", "соперник отвечает Kh8". */
+    private fun replyPhrase(move: ProbedMove, side: Side): String {
+        val reply = move.replySan?.let { SanRuFormatter.move(it) } ?: return "это уступает лучшему ходу"
+        if (move.replyMates) return "в ответ мат $reply"
+        val piece = move.replyPiece
+        val takes = move.replyTakes
+        if (piece != null && takes != null) {
+            val who = PieceLexicon.name(piece) + (move.replyFrom?.let { " " + sq(it) }.orEmpty())
+            return who + " берёт " + PieceLexicon.name(takes, GrammaticalCase.ACCUSATIVE) + ": " + reply
+        }
+        return SideLexicon.name(side.flip()) + " отвечают " + reply
+    }
+
+    /** "Слон f4 — единственная защита h2: если он уйдёт или линию перекроют, Qxh2#." */
+    private fun guardSentence(guard: MateGuard, mine: Boolean): String {
+        val name = capitalize(PieceLexicon.name(guard.defenderPiece))
+        val masculine = PieceLexicon.genderOf(guard.defenderPiece) == Gender.MASCULINE
+        val mate = SanRuFormatter.move(guard.mateSan)
+        return if (mine) {
+            name + " " + sq(guard.defender) + " — единственная защита " + sq(guard.target) + ": если " +
+                (if (masculine) "он уйдёт" else "она уйдёт") + " или линию перекроют, " + mate + "."
+        } else {
+            name + " " + sq(guard.defender) + " соперника — единственная защита " + sq(guard.target) + ": отвлечь " +
+                (if (masculine) "его" else "её") + " или перекрыть линию — и " + mate + "."
+        }
+    }
+
+    /**
+     * Четвёртый пункт своего плана: ходы против главных угроз соперника с
+     * оценкой и тем, что они делают. Null — сейчас шах, отвечать надо на него.
+     */
+    private fun counterItems(section: Section.MyAttack, mover: Side): List<Item> {
+        if (section.counterThreats.isEmpty()) return emptyList()
+        val against = "Против " + section.counterThreats.joinToString(" и ") { SanRuFormatter.move(it) }
+        if (section.counterMoves.isEmpty()) return listOf(Item("$against хорошего ответа не нашлось."))
+        return section.counterMoves.map { move ->
+            val score = move.scoreFromWhite?.let { " (оценка " + ScoreFormat.short(it) + ")" }.orEmpty()
+            val effects = MoveEffects.phrases(move.fenBefore, move.uci).takeIf { it.isNotEmpty() }
+                ?.let { ": " + MoveEffects.list(it) }.orEmpty()
+            val head = "Против " + SanRuFormatter.move(move.againstSan ?: section.counterThreats.first()) + " — " +
+                SanRuFormatter.move(move.san) + score + effects + "."
+            if (move.works) {
+                Item(head)
+            } else {
+                Item(head, listOf(Item("Но это уступает лучшему ходу: " + lossPhrase(move.lossVsBestCentipawns) + ".")), weight = -BAD_ADVICE_PENALTY)
+            }
+        }
+    }
 
     /**
      * "{Метка}: {пункт}" одной строкой, если пункт один, иначе метка и пункты
@@ -1310,9 +1452,12 @@ object TextRenderer {
             "слабее лучшего, " + lossPhrase(human.lossVsBestCentipawns)
         }
         val humanSan = human.lineSan.firstOrNull()?.let { SanRuFormatter.move(it) }.orEmpty()
+        // Смысл хода, как в "Почему" у лучшего: что он делает на доске.
+        val meaning = human.lineUci.firstOrNull()?.let { MoveEffects.phrases(explanation.fen, it) }.orEmpty()
+            .takeIf { it.isNotEmpty() }?.let { Item(humanSan + " — " + MoveEffects.list(it) + ".") }
         val humanItem = Item(
             "Человек: " + SanRuFormatter.line(human.lineSan) + " (" + loss + ").",
-            listOf(Item(humanDifference(human, humanSan, computerSan) + why.joinToString(" ", prefix = " ").trimEnd())),
+            listOfNotNull(meaning) + listOf(Item(humanDifference(human, humanSan, computerSan) + why.joinToString(" ", prefix = " ").trimEnd())),
         )
         return itemLines(listOf(computer, humanItem)).joinToString(System.lineSeparator())
     }
@@ -1480,6 +1625,8 @@ object TextRenderer {
     private fun moveReasonLine(section: Section.PlayedMove, mover: Side): String? {
         if (!isPunished(section.classification)) return null
         val parts = mutableListOf<String>()
+        // Пропущенный мат и есть причина: висящая пешка рядом с ним только сбивает.
+        section.allowedMate?.let { return "Почему: " + decapitalize(allowedMateSentence(it, section.playedSan, mover)) }
         val swing = section.materialSwing ?: 0
         val dangers = section.punishment.filter(::explainsDanger).sortedBy(::damageRank)
         parts += statementsFor(dangers, emptySet(), Glossary(), RenderMemory(), MAX_FACTS_PER_REASON)
@@ -2179,6 +2326,7 @@ object TextRenderer {
         // "Защиты нет" и "взять обратно невыгодно" — разные вещи: во втором случае
         // взять обратно есть чем, но размен всё равно проигран, и советовать
         // "защити фигуру" было бы вредным советом.
+        if (fact.capturedWithCheck) return " (бьёт $attackerName ${sq(attacker)} с шахом, взять обратно сразу нельзя)"
         val verdict = if (fact.defended) "взять обратно невыгодно" else "защиты нет"
         val why = recaptureWhy(fact) ?: return " (бьёт $attackerName ${sq(attacker)}, $verdict)"
         return " (бьёт $attackerName ${sq(attacker)}; $why)"

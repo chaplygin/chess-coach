@@ -148,6 +148,9 @@ data class CaptureCheck(
     val replySan: String? = null,
     /** Что этим ответом берёт соперник. */
     val replyTakes: com.github.bhlangonijr.chesslib.PieceType? = null,
+    val uci: String = "",
+    /** Ответ соперника ставит мат. */
+    val replyMates: Boolean = false,
 )
 
 /**
@@ -166,6 +169,55 @@ data class MateIdea(
     val scoreFromWhite: org.chesscoach.core.Score? = null,
     val lossVsBestCentipawns: Int = 0,
     val replySan: String? = null,
+)
+
+/**
+ * Ход-кандидат чек-листа (шах, взятие, ответ на угрозу), проверенный движком.
+ * [works] — ход не уступает лучшему больше чем на полпешки; иначе он печатается
+ * с "но" и ответом соперника. У ходов соперника оценки нет: она считалась бы на
+ * доске с пропущенным ходом.
+ */
+data class ProbedMove(
+    val san: String,
+    val uci: String,
+    val works: Boolean,
+    val scoreFromWhite: org.chesscoach.core.Score? = null,
+    val lossVsBestCentipawns: Int = 0,
+    val replySan: String? = null,
+    /** Чем отвечает соперник: фигура, её поле и что она берёт. */
+    val replyPiece: com.github.bhlangonijr.chesslib.PieceType? = null,
+    val replyFrom: com.github.bhlangonijr.chesslib.Square? = null,
+    val replyTakes: com.github.bhlangonijr.chesslib.PieceType? = null,
+    val replyMates: Boolean = false,
+    /** Позиция, из которой сделан ход: по ней тренер называет, что ход делает. */
+    val fenBefore: String = "",
+    /** Для ответа на угрозу: какой ход соперника он снимает. */
+    val againstSan: String? = null,
+)
+
+/**
+ * Единственная защита от мата: [defender] держит поле [target], и если он уйдёт
+ * или линию перекроют, [mateSan] ставит мат.
+ */
+data class MateGuard(
+    val defender: com.github.bhlangonijr.chesslib.Square,
+    val defenderPiece: com.github.bhlangonijr.chesslib.PieceType,
+    val target: com.github.bhlangonijr.chesslib.Square,
+    val mateSan: String,
+)
+
+/** Почему сыгранный ход пропускает мат. */
+enum class AllowedMateReason { MOVES_DEFENDER, BLOCKS_DEFENDER, IGNORES_THREAT, OTHER }
+
+data class AllowedMate(
+    val mateSan: String,
+    /** Мат в столько ходов; 1 — мат следующим ходом, тогда [mateSan] — сам матующий ход. */
+    val movesToMate: Int,
+    val reason: AllowedMateReason,
+    /** Защитник, которого снял или перекрыл ход, и поле, которое он держал. */
+    val defender: com.github.bhlangonijr.chesslib.Square? = null,
+    val defenderPiece: com.github.bhlangonijr.chesslib.PieceType? = null,
+    val target: com.github.bhlangonijr.chesslib.Square? = null,
 )
 
 /** Что делает ход, который человек находит сразу. Порядок — от самого заметного. */
@@ -234,6 +286,10 @@ sealed interface Section {
         val mates: List<String> = emptyList(),
         /** Зачем соперник сделал свой прошлый ход. Null — прошлый ход неизвестен. */
         val previousMove: PreviousMove? = null,
+        /** Шахи соперника, проверенные движком: работающие и с "но". */
+        val probedChecks: List<ProbedMove> = emptyList(),
+        /** Мои фигуры — единственная защита от мата соперника. */
+        val mateGuards: List<MateGuard> = emptyList(),
     ) : Section
 
     /**
@@ -265,6 +321,16 @@ sealed interface Section {
         val captureChecks: List<CaptureCheck> = emptyList(),
         /** Мат в два своих хода, если он есть в позиции. */
         val mateIdea: MateIdea? = null,
+        /** Свои шахи, проверенные движком. */
+        val probedChecks: List<ProbedMove> = emptyList(),
+        /** Свои взятия сверх висящих фигур, не уступающие лучшему ходу. */
+        val probedCaptures: List<ProbedMove> = emptyList(),
+        /** Ходы против главных угроз соперника. */
+        val counterMoves: List<ProbedMove> = emptyList(),
+        /** Угрозы соперника, против которых искали ход: без них пункт "нет". */
+        val counterThreats: List<String> = emptyList(),
+        /** Фигуры соперника — единственная защита от моего мата. */
+        val mateGuards: List<MateGuard> = emptyList(),
     ) : Section
 
     /**
@@ -299,6 +365,8 @@ sealed interface Section {
         val materialSwing: Int? = null,
         /** Что соперник получил к концу варианта: без этого позиционная потеря остаётся без объяснения. */
         val lineGains: List<Fact> = emptyList(),
+        /** Ход пропускает мат: какой и почему. */
+        val allowedMate: AllowedMate? = null,
     ) : Section {
         val matchesBest: Boolean get() = playedUci == bestUci
     }

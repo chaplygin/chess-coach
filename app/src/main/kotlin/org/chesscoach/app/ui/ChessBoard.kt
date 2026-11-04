@@ -40,7 +40,9 @@ import kotlin.math.sin
 // Цвета доски Lichess.
 private val LIGHT_SQUARE = Color(0xFFF0D9B5)
 private val DARK_SQUARE = Color(0xFFB58863)
+// Ход стороны, которая только что сходила: куда — бледно-зелёным, откуда — ещё бледнее, как на Lichess.
 private val LAST_MOVE_TINT = Color(0x699BC700)
+private val LAST_FROM_TINT = Color(0x389BC700)
 
 // Прошлый ход соперника: куда пришёл — серым, откуда — бледнее.
 private val PREVIOUS_TO_TINT = Color(0x66707070)
@@ -96,12 +98,8 @@ fun ChessBoard(
     onSquareTap: ((String) -> Unit)? = null,
 ) {
     val squares = remember(fen) { BoardLayout.parsePlacement(fen) }
-    val highlight = remember(lastMoveFrom, lastMoveTo) {
-        setOfNotNull(
-            lastMoveFrom?.let(BoardLayout::squareIndex),
-            lastMoveTo?.let(BoardLayout::squareIndex),
-        )
-    }
+    val highlightTo = remember(lastMoveTo) { lastMoveTo?.let(BoardLayout::squareIndex) }
+    val highlightFrom = remember(lastMoveFrom) { lastMoveFrom?.let(BoardLayout::squareIndex) }
 
     BoxWithConstraints(modifier = modifier.fillMaxWidth().aspectRatio(1f)) {
         val coordinateFontSize = (maxWidth.value / 8f * 0.22f).sp
@@ -123,7 +121,8 @@ fun ChessBoard(
                                 .then(
                                     when {
                                         name == selectedSquare -> Modifier.background(SELECTED_TINT)
-                                        index in highlight -> Modifier.background(LAST_MOVE_TINT)
+                                        index == highlightTo -> Modifier.background(LAST_MOVE_TINT)
+                                        index == highlightFrom -> Modifier.background(LAST_FROM_TINT)
                                         name == previousMoveTo -> Modifier.background(PREVIOUS_TO_TINT)
                                         name == previousMoveFrom -> Modifier.background(PREVIOUS_FROM_TINT)
                                         else -> Modifier

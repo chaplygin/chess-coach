@@ -43,6 +43,44 @@ function h(tag, props = {}, ...children) {
   return node;
 }
 
+// ---------- История браузера ----------
+
+// Кнопка "Назад" браузера ведёт на прошлый экран, как кнопка "Назад" на странице.
+// Экран кладёт себя в историю; ход внутри разбора историю не засоряет.
+const gamesById = new Map();
+let restoring = false;
+let screenCleanup = null;
+
+function track(state) {
+  const cleanup = screenCleanup;
+  screenCleanup = null;
+  if (cleanup) cleanup();
+  if (restoring) return;
+  const current = history.state;
+  if (!current) { history.replaceState(state, ""); return; }
+  if (current.s === state.s && current.id === state.id) { history.replaceState(state, ""); return; }
+  history.pushState(state, "");
+}
+
+function remember(games) {
+  games.forEach((game) => gamesById.set(game.id, game));
+}
+
+window.addEventListener("popstate", (event) => {
+  const state = event.state || {};
+  const game = state.id ? gamesById.get(state.id) : null;
+  restoring = true;
+  try {
+    if (state.s === "review" && game) showReview(game, state.ply || 0);
+    else if (state.s === "recap" && game) showRecap(game);
+    else if (state.s === "report" && store.get("username")) showReport(!yearGames);
+    else if (store.get("username")) showGames();
+    else showStart();
+  } finally {
+    restoring = false;
+  }
+});
+
 // ---------- Вход ----------
 
 function base64Url(bytes) {
@@ -130,6 +168,7 @@ function renderAccount() {
 // ---------- Список партий ----------
 
 function showStart(errorText) {
+  track({ s: "start" });
   renderAccount();
   const input = h("input", { placeholder: "Ник на Lichess", "aria-label": "Ник на Lichess", autocomplete: "off" });
   const form = h("form", {
@@ -230,6 +269,7 @@ function inWindow(games, months) {
 }
 
 async function showReport(reload = true) {
+  track({ s: "report" });
   const username = store.get("username");
   const months = Number(store.get("errorWindow") || 12);
   if (reload || !yearGames || yearGames.username !== username) {
@@ -246,6 +286,7 @@ async function showReport(reload = true) {
           try { return toGame(JSON.parse(line), username); } catch { return null; }
         }).filter(Boolean),
       };
+      remember(yearGames.games);
     } catch (error) {
       app.replaceChildren(h("button", { class: "link", onclick: showGames }, "‹ Партии"), h("p", { class: "error" }, error.message));
       return;
@@ -346,6 +387,7 @@ function menuRow(icon, tint, title, subtitle, onclick) {
 }
 
 async function showGames() {
+  track({ s: "games" });
   renderAccount();
   const username = store.get("username");
   app.replaceChildren(h("p", { class: "note" }, "Загружаю партии " + username + "…"));
@@ -357,6 +399,7 @@ async function showGames() {
     const games = body.split(NEWLINE).filter(Boolean).map((line) => {
       try { return toGame(JSON.parse(line), username); } catch { return null; }
     }).filter(Boolean);
+    remember(games);
 
     if (games.length === 0) {
       app.replaceChildren(h("p", {}, "У игрока " + username + " нет завершённых партий в обычные шахматы."));
@@ -567,11 +610,14 @@ function scanBlock(scan, onRetry) {
 // ---------- Итоги партии ----------
 
 function showRecap(game) {
+  track({ s: "recap", id: game.id });
   let closed = false;
   const scan = scanFor(game);
   const listener = () => { if (!closed) render(); };
   scan.listeners.add(listener);
-  const leave = (next) => { closed = true; scan.listeners.delete(listener); next(); };
+  const close = () => { closed = true; scan.listeners.delete(listener); };
+  screenCleanup = close;
+  const leave = (next) => { close(); next(); };
 
   function render() {
     const result = recapOf(game, scan.evaluations);
@@ -630,14 +676,16 @@ function drawBoard(fen, flipped, lastUci, arrows, interaction, previousUci = "")
   if (flipped) squares.reverse();
 
   const name = (s) => "abcdefgh"[s.file] + (8 - s.rank);
-  const lit = lastUci ? [lastUci.slice(0, 2), lastUci.slice(2, 4)] : [];
+  // Ход стороны, которая только что сходила: куда — бледно-зелёным, откуда — ещё бледнее.
+  const litTo = lastUci ? lastUci.slice(2, 4) : "";
+  const litFrom = lastUci ? lastUci.slice(0, 2) : "";
   const selected = interaction?.selected;
   const targets = interaction?.targets || [];
   const pieceFile = (piece) => "pieces/" + (piece === piece.toUpperCase() ? "w" : "b") + piece.toUpperCase() + ".svg";
   // Как на Lichess: буквы файлов внизу слева, номера горизонталей справа сверху.
   const board = h("div", { class: "board" + (interaction ? " live" : ""), role: "img", "aria-label": "Позиция на доске" }, squares.map((s, index) => h("div", {
     // Прошлый ход соперника: куда пришёл — серым, откуда — бледнее.
-    class: "sq " + ((s.rank + s.file) % 2 ? "d" : "l") + (name(s) === selected ? " sel" : lit.includes(name(s)) ? " hl"
+    class: "sq " + ((s.rank + s.file) % 2 ? "d" : "l") + (name(s) === selected ? " sel" : name(s) === litTo ? " hl" : name(s) === litFrom ? " hl-from"
       : name(s) === previousUci.slice(2, 4) ? " prev-to" : name(s) === previousUci.slice(0, 2) ? " prev-from" : ""),
     onclick: interaction ? () => interaction.onSquare(name(s)) : undefined,
   },
@@ -960,6 +1008,13 @@ function parseEngineLines(fen, infoLines) {
   }).filter(Boolean).slice(0, 2);
 }
 
+// Ход, который ведёт из одной позиции в другую: варианты тренера приходят позициями.
+function uciBetween(fenBefore, fenAfter) {
+  if (!fenBefore || !fenAfter) return "";
+  const move = parseLegal(fenBefore).find((m) => m.fenAfter.split(" ")[0] === fenAfter.split(" ")[0]);
+  return move ? move.uci : "";
+}
+
 // Позиция после каждого хода варианта; на невозможном ходе обрывается.
 function fensAfter(fen, uciMoves) {
   const fens = [];
@@ -1015,6 +1070,7 @@ const landscape = window.matchMedia("(orientation: landscape) and (max-height: 6
 
 // [startPly] — сколько ходов сделано: 0 — начальная позиция, 1 — после первого хода.
 function showReview(game, startPly = 0) {
+  track({ s: "review", id: game.id, ply: startPly });
   const positionsText = replay(game.moves, game.initialFen);
   const positions = parsePositions(positionsText);
   const flipped = game.myColor === "black";
@@ -1056,12 +1112,17 @@ function showReview(game, startPly = 0) {
   };
   scan.listeners.add(listener);
 
-  function leave(next) {
+  function close() {
     closed = true;
     clearTimeout(timer);
     scan.listeners.delete(listener);
     landscape.removeEventListener("change", onLayout);
     document.removeEventListener("keydown", onKey);
+  }
+  screenCleanup = close;
+
+  function leave(next) {
+    close();
     next();
   }
 
@@ -1117,6 +1178,9 @@ function showReview(game, startPly = 0) {
     const token = ++stepRequest;
     if (coachWaiting) return;
     const fens = [...new Set([...engineLines.flatMap((l) => l.fens), ...variations.flatMap((v) => v.fens)])];
+    const here = displayedFen();
+    const coachLine = !shown && !lineActive() && ply > 0 ? coachLineAt(here) : null;
+    if (coachLine) coachLine.fens.forEach((f) => { if (!fens.includes(f)) fens.push(f); });
     for (const fen of fens) {
       if (token !== stepRequest || closed) return;
       if (stepScores.has(fen) || gameEnd(fen)) continue;
@@ -1144,6 +1208,22 @@ function showReview(game, startPly = 0) {
       render();
       askSteps();
     }, () => {});
+  }
+
+  // Вариант тренера из позиции [fen]: продолжение того варианта разбора, что проходит через неё.
+  function coachLineAt(fen) {
+    const played = variations.find((v) => v.title === "Сыгранный ход" && v.fens[0] === fen)
+      || variations.find((v) => v.title === "Лучший ход" && v.fens[0] === fen);
+    if (!played || played.fens.length < 2) return null;
+    // Лучший ответ и сама позиция — одно число: тренер главнее короткого расчёта.
+    if (stepScores.has(fen)) stepScores.set(played.fens[1], stepScores.get(fen));
+    return {
+      score: stepScores.get(fen) || null,
+      san: played.san.slice(1),
+      first: uciBetween(fen, played.fens[1]),
+      startFen: fen,
+      fens: played.fens.slice(1),
+    };
   }
 
   function playMove(move) {
@@ -1207,7 +1287,23 @@ function showReview(game, startPly = 0) {
     const fen = displayedFen();
     const legal = shown ? [] : parseLegal(fen);
     const ended = gameEnd(fen);
-    const lastUci = shown ? "" : lineActive() ? (lineCursor >= 0 ? line[lineCursor].uci : "") : (ply > 0 ? positions[ply - 1].uci : "");
+    // Подсветка всегда: ход, после которого позиция на доске, и ход перед ним.
+    const gameMove = ply > 0 ? positions[ply - 1].uci : "";
+    const gamePrevious = ply > 1 ? positions[ply - 2].uci : "";
+    let lastUci = gameMove;
+    let previousUci = gamePrevious;
+    if (shown) {
+      const v = variations[shown.line];
+      const startOf = (step) => (step === 0 ? (ply > 0 ? positions[ply - 1].fenBefore : startFen) : v.fens[step - 1]);
+      lastUci = uciBetween(startOf(shown.step), v.fens[shown.step]);
+      previousUci = shown.step > 0 ? uciBetween(startOf(shown.step - 1), v.fens[shown.step - 1]) : gamePrevious;
+    } else if (lineActive() && lineCursor >= 0) {
+      lastUci = line[lineCursor].uci;
+      previousUci = lineCursor > 0 ? line[lineCursor - 1].uci : gameMove;
+    }
+    // Одна линия на позицию: после сыгранного хода первая строка — вариант тренера, вторая — другой ход движка.
+    const coachLine = !shown && !lineActive() && ply > 0 ? coachLineAt(fen) : null;
+    const headerLines = coachLine ? [coachLine, ...engineLines.filter((l) => l.first !== coachLine.first).slice(0, 1)] : engineLines;
     const boardArrows = shown ? [] : lineActive()
       ? (engineLines[0] ? [{ uci: engineLines[0].first, style: "BEST_MOVE" }] : [])
       : arrows;
@@ -1256,12 +1352,12 @@ function showReview(game, startPly = 0) {
 
     // Чей ответ, ходы с номерами и оценка после каждого; оценка первой линии — оценка самой позиции.
     const engineBlock = h("div", { class: "engine-lines" }, ended ? h("strong", {}, ended) : [
-      engineLines.length ? h("div", { class: "note small" }, "Ответ " + (fen.split(" ")[1] === "w" ? "белых" : "чёрных") + ", две лучшие линии:") : null,
-      ...engineLines.map((l, index) => h("div", { class: "engine-line" },
+      headerLines.length ? h("div", { class: "note small" }, "Ответ " + (fen.split(" ")[1] === "w" ? "белых" : "чёрных") + ", две лучшие линии:") : null,
+      ...headerLines.map((l, index) => h("div", { class: "engine-line" },
         // Оценка линии — оценка после её первого хода, она же стоит и под ним.
-        h("span", { class: "score" }, shortScore((index === 0 ? stepScores.get(l.startFen) : null) || stepScores.get(l.fens[0]) || l.score)),
+        h("span", { class: "score" }, shortScore((index === 0 ? stepScores.get(l.startFen) : null) || stepScores.get(l.fens[0]) || l.score || { cp: null, mate: null })),
         h("span", { class: "moves-line" }, numbered(l.startFen, l.san).map((san, step) =>
-          figurine(san) + (step > 0 && scoreAt(l.fens[step] || "") ? " (" + scoreAt(l.fens[step]) + ")" : "")).join(" ")),
+          figurine(san) + (scoreAt(l.fens[step] || "") ? " (" + scoreAt(l.fens[step]) + ")" : "")).join(" ")),
       )),
     ]);
     const boardBlock = h("div", { class: "board-row" },
@@ -1269,7 +1365,7 @@ function showReview(game, startPly = 0) {
         selected,
         targets: legal.filter((m) => m.from === selected).map((m) => m.to),
         onSquare,
-      }, !shown && !lineActive() && ply > 1 ? positions[ply - 2].uci : ""),
+      }, previousUci),
       drawEvalBar(barScore, flipped),
     );
     const promotionBlock = promotion.length ? h("div", { class: "row" }, h("span", { class: "note" }, "Превратить в:"),
@@ -1348,6 +1444,7 @@ function showReview(game, startPly = 0) {
 // ---------- Запуск ----------
 
 async function start() {
+  history.replaceState(null, "");
   const params = new URLSearchParams(location.search);
   if (params.get("code") || params.get("error")) {
     try {

@@ -125,6 +125,7 @@ input {
 .sq.l { background: #f0d9b5; color: #b58863; }
 .sq.d { background: #b58863; color: #f0d9b5; }
 .sq.hl::after { content: ""; position: absolute; inset: 0; background: rgba(155, 199, 0, 0.41); }
+.sq.hl-from::after { content: ""; position: absolute; inset: 0; background: rgba(155, 199, 0, 0.22); }
 /* Прошлый ход соперника: куда пришёл — серым, откуда — бледнее. */
 .sq.prev-to::after { content: ""; position: absolute; inset: 0; background: rgba(112, 112, 112, 0.4); }
 .sq.prev-from::after { content: ""; position: absolute; inset: 0; background: rgba(112, 112, 112, 0.2); }

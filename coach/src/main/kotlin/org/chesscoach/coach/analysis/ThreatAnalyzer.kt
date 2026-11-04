@@ -129,9 +129,13 @@ class ThreatAnalyzer(
     private val featureSource: FeatureSource,
 ) {
 
-    suspend fun analyse(fen: String, normalScore: Score): ThreatFact? {
+    suspend fun analyse(fen: String, normalScore: Score): ThreatFact? =
+        analyse(fen, measureNullMoveThreat(engineClient, fen, normalScore))
+
+    /** То же по уже посчитанному нулевому ходу: его лучший ход нужен и для проверки шахов соперника. */
+    internal fun analyse(fen: String, measured: NullMoveThreat?): ThreatFact? {
         val ourSide = NullMoveUtil.sideToMoveOf(fen)
-        val threat = measureNullMoveThreat(engineClient, fen, normalScore) ?: return null
+        val threat = measured ?: return null
 
         if (threat.dropCentipawns < CoachThresholds.THREAT_MIN_CP) return null
 
