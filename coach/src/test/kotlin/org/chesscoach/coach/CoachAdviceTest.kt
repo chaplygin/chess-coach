@@ -120,7 +120,7 @@ class CoachAdviceTest {
             ),
         )
         val result = CoachEngine(engine).tryCandidate(queenPosition, "d4") as CandidateResult.Explained
-        assertTrue(result.text, result.text.contains("Оценка после хода: +2.3. После лучшего e4: +0.2."))
+        assertTrue(result.text, result.text.contains("Оценка после хода +2.3, после лучшего e4 +0.2: потеря 2.1."))
         assertTrue(result.text, result.text.contains("Вариант после хода: exd4 exd4 Nd5."))
         assertTrue(result.text, result.text.contains("Почему:"))
         assertFalse(result.text, result.text.contains("Вопрос на будущее"))
@@ -132,7 +132,7 @@ class CoachAdviceTest {
     fun `verdict comes first and names the capture`() = runBlocking {
         val engine = ScriptedEngine(mapOf(knightPosition to EngineLine(1, Score.Cp(-120), listOf("e4d4", "d1b3"), 10)))
         val text = TextRenderer.render(CoachEngine(engine).explain(knightPosition))
-        assertTrue(text, text.lines()[1].startsWith("Вывод: играть Qxd4 (+1.2): берёт коня d4."))
+        assertTrue(text, text.lines()[1].startsWith(TextRenderer.BULLET + "Вывод: играть Qxd4 (оценка +1.2): берёт коня d4."))
     }
 
     @Test

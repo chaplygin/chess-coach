@@ -180,7 +180,10 @@ function toGame(raw, username) {
 }
 
 const OUTCOME_TEXT = { WIN: "Победа", LOSS: "Поражение", DRAW: "Ничья" };
-const REFERENCE_TITLE = "ТЕРМИНЫ";
+// Разметка текста тренера — та же, что разбирает приложение (TextRenderer).
+const SECTION_MARK = "## ";
+const REFERENCE_TITLE = SECTION_MARK + "Термины";
+const BULLETS = ["• ", "◦ ", "▪ "];
 
 // Сводка считается только по партиям, которые уже разобраны на этом устройстве.
 function reportPayload(games) {
@@ -406,13 +409,37 @@ function moveLabel(position) {
   return position.moveNumber + (position.white ? ". " : "... ") + position.san;
 }
 
-// Заголовок хода, как MoveHeadline в приложении: "8. Qh5+ — зевок: +0.5 → -2.9".
-function headline(position, before, after) {
-  let text = moveLabel(position);
-  if (after) text += " — " + CLASS_LABEL[after.cls];
-  if (before && after) text += ": " + shortScore(before) + " → " + shortScore(after);
-  else if (after) text += ": " + shortScore(after);
-  return text;
+// Заголовок хода, как MoveHeadline в приложении: "8. Qh5+ — зевок". Оценки — отдельными
+// подписанными метками из текста тренера: у одной позиции одно число.
+function headline(position, after, coach) {
+  const label = coach.verdict || (after ? CLASS_LABEL[after.cls] : "");
+  return moveLabel(position) + (label ? " — " + label : "");
+}
+
+// Итоги групп из текста тренера: "━━ До хода ━━ оценка -3.9", "━━ Ваш ход Qd7 ━━ зевок, потеря 7.6".
+function coachScores(text) {
+  const result = { before: "", after: "", verdict: "", loss: "" };
+  text.split(NEWLINE).filter((line) => line.startsWith(GROUP_MARK)).forEach((line) => {
+    const rest = line.slice(GROUP_MARK.length);
+    const title = rest.split(GROUP_MARK)[0].trim();
+    const tag = rest.split(GROUP_MARK).slice(1).join(GROUP_MARK).trim();
+    if (!tag) return;
+    if (title.startsWith("До хода")) result.before = tag.replace("оценка ", "");
+    else if (title.startsWith("После хода")) result.after = tag.replace("оценка ", "");
+    else {
+      result.verdict = tag.split(", ")[0];
+      result.loss = tag.split(", ").slice(1).join(", ");
+    }
+  });
+  return result;
+}
+
+function scoreTags(coach) {
+  const tags = [];
+  if (coach.before) tags.push(h("span", { class: "tag" }, "до хода " + coach.before));
+  if (coach.after) tags.push(h("span", { class: "tag" }, "после хода " + coach.after));
+  if (coach.loss) tags.push(h("span", { class: "tag bad" }, coach.loss));
+  return tags.length ? h("div", { class: "tags" }, tags) : null;
 }
 
 function parsePositions(text) {
@@ -726,25 +753,161 @@ function drawGraph(evaluations, total, ply, moments, onPick) {
   return svg;
 }
 
-// Текст тренера: справочный блок свёрнут, чтобы не заслонять разбор.
-// Заголовки групп "━━ ДО ХОДА ━━" выделены: по ним глаз находит, где что.
+// Текст тренера по его разметке: группы — карточками с иконкой и итогом, разделы —
+// жирными заголовками, пункты — буллитами с отступом. Те же правила, что CoachText
+// в приложении: метка до двоеточия жирная, ходы плашками, цена в скобках цветом.
 const GROUP_MARK = "━━";
-function coachLines(text) {
-  return text.split(NEWLINE).flatMap((line, index) => {
-    const node = line.startsWith(GROUP_MARK)
-      ? h("strong", { class: "group-title" }, line.split(GROUP_MARK).join("").trim())
-      : document.createTextNode(line);
-    return index === 0 ? [node] : [document.createTextNode(NEWLINE), node];
+const MAX_LABEL = 42;
+const SAN_MOVE = /^(O-O-O|O-O|[KQRBN][a-h]?[1-8]?x?[a-h][1-8]|[a-h]x[a-h][1-8](=[QRBN])?|[a-h][1-8](=[QRBN])?)[+#]?$/;
+const MOVE_NUMBER = /^[0-9]+([.]|[.][.][.]|…)$/;
+
+function labelEnd(text) {
+  let colon = text.indexOf(": ");
+  if (colon < 1 || colon > MAX_LABEL) colon = text.endsWith(":") && text.length <= MAX_LABEL ? text.length - 1 : -1;
+  if (colon < 0 || text.slice(0, colon).includes("(")) return -1;
+  return colon + 1;
+}
+
+function tokenCore(token) {
+  let core = token;
+  while (core.startsWith("(")) core = core.slice(1);
+  while (core && ".,;:)".includes(core[core.length - 1])) core = core.slice(0, -1);
+  return core;
+}
+
+// Ходы плашками: подряд идущие записи, среди которых есть несомненный ход. Голое поле "d4" — не ход.
+function moveRuns(text) {
+  const runs = [];
+  let start = -1, end = -1, definite = false, index = 0;
+  const close = () => { if (start >= 0 && definite) runs.push([start, end]); start = -1; definite = false; };
+  for (const token of text.split(" ")) {
+    const tokenStart = index;
+    index += token.length + 1;
+    const core = tokenCore(token);
+    const isMove = core && SAN_MOVE.test(core);
+    const isNumber = core && MOVE_NUMBER.test(core);
+    if (isMove || isNumber) {
+      const coreStart = tokenStart + token.indexOf(core);
+      if (start < 0) start = coreStart;
+      end = coreStart + core.length;
+      if (isMove && ("KQRBNO".includes(core[0]) || /[x+#=]/.test(core))) definite = true;
+      if (token.length > core.length + token.indexOf(core)) close();
+    } else close();
+  }
+  close();
+  return runs;
+}
+
+function tagRanges(text) {
+  const found = [];
+  let from = 0;
+  for (;;) {
+    const open = text.indexOf("(", from);
+    if (open < 0) break;
+    const close = text.indexOf(")", open);
+    if (close < 0) break;
+    const inside = text.slice(open + 1, close);
+    if (/для (вас|белых|чёрных)/.test(inside) || /^(оценка|потеря|слабее|равноценно)/.test(inside)) found.push([open, close + 1]);
+    from = close + 1;
+  }
+  return found;
+}
+
+// Красное — потеря или угроза читателю, зелёное — выигрыш, остальное серое.
+function tagClass(text) {
+  if (/зевок|ошибка|рушится/.test(text) || (text.includes("потеря") && !text.includes("потеря 0.0")) || (text.startsWith("-") && text.includes("для вас"))) return "tag bad";
+  if ((text.startsWith("+") && text.includes("для вас")) || text.includes("лучший")) return "tag good";
+  return "tag";
+}
+
+// Строка в узлы: у каждого символа свой набор стилей, соседние с одинаковым набором — один span.
+function styledLine(text) {
+  const bold = new Array(text.length).fill(false);
+  const move = new Array(text.length).fill(false);
+  const tag = new Array(text.length).fill("");
+  const label = labelEnd(text);
+  for (let i = 0; i < label; i++) bold[i] = true;
+  moveRuns(text).forEach(([a, b]) => { for (let i = a; i < b; i++) move[i] = true; });
+  tagRanges(text).forEach(([a, b]) => { const cls = tagClass(text.slice(a + 1, b - 1)); for (let i = a; i < b; i++) tag[i] = cls; });
+  const nodes = [];
+  let i = 0;
+  while (i < text.length) {
+    let j = i;
+    while (j < text.length && bold[j] === bold[i] && move[j] === move[i] && tag[j] === tag[i]) j++;
+    const classes = [bold[i] ? "label" : "", move[i] ? "mv" : "", tag[i]].filter(Boolean).join(" ");
+    const piece = text.slice(i, j);
+    nodes.push(classes ? h("span", { class: classes }, piece) : document.createTextNode(piece));
+    i = j;
+  }
+  return nodes;
+}
+
+function sectionClass(title) {
+  if (title.startsWith("План соперника")) return "section-title bad";
+  if (title.startsWith("Мой план")) return "section-title good";
+  if (title.startsWith("Сыгранный ход") && /зевок|ошибка/.test(title)) return "section-title bad";
+  return "section-title";
+}
+
+function coachLine(line) {
+  if (line.startsWith(SECTION_MARK)) {
+    const title = line.slice(SECTION_MARK.length);
+    return h("div", { class: sectionClass(title) }, title);
+  }
+  const level = BULLETS.findIndex((bullet) => line.startsWith(bullet));
+  if (level < 0) return h("div", { class: "coach-line" }, styledLine(line));
+  const body = line.slice(2);
+  const tone = body.startsWith("Но после") ? " bad-line" : body.startsWith("Размены (справочно)") ? " muted" : "";
+  return h("div", { class: "bullet level-" + level + tone },
+    h("span", { class: "dot-mark" }, line[0]),
+    h("span", {}, styledLine(body)));
+}
+
+function groupIcon(title) {
+  if (title === null) return "⚑";
+  if (title.startsWith("До хода") || title.startsWith("Позиция")) return "↶";
+  if (title.startsWith("После хода")) return "↷";
+  return "♞";
+}
+
+function coachBlocks(text) {
+  const blocks = [];
+  let current = { title: null, tag: "", lines: [] };
+  text.split(NEWLINE).forEach((line) => {
+    if (line.startsWith(GROUP_MARK)) {
+      if (current.lines.length || current.title !== null) blocks.push(current);
+      const rest = line.slice(GROUP_MARK.length);
+      current = { title: rest.split(GROUP_MARK)[0].trim(), tag: rest.split(GROUP_MARK).slice(1).join(GROUP_MARK).trim(), lines: [] };
+    } else if (line.trim()) current.lines.push(line);
+  });
+  if (current.lines.length || current.title !== null) blocks.push(current);
+  return blocks;
+}
+
+function coachCards(text) {
+  return coachBlocks(text).map((block) => {
+    const move = block.title !== null && /^(Ваш ход|Ход |Что играть)/.test(block.title);
+    const lines = block.title === null ? block.lines.slice(1) : block.lines;
+    return h("div", { class: "coach-card" + (move ? " move" : "") },
+      h("div", { class: "coach-head" },
+        h("span", { class: "icon" }, groupIcon(block.title)),
+        h("strong", {}, block.title === null ? "Итог хода" : block.title),
+        block.tag ? h("span", { class: tagClass(block.tag) }, block.tag) : null),
+      block.title === null && block.lines[0] ? h("div", { class: "note" }, block.lines[0]) : null,
+      lines.map(coachLine));
   });
 }
 
+// Текст тренера: справочный блок свёрнут, чтобы не заслонять разбор.
 function coachBlock(text, waiting) {
+  if (waiting || !text.includes(NEWLINE)) return h("div", { class: "coach wait" }, text);
   const marker = NEWLINE + REFERENCE_TITLE + NEWLINE;
   const at = text.indexOf(marker);
-  if (at < 0) return h("div", { class: "coach" + (waiting ? " wait" : "") }, coachLines(text));
-  return h("div", { class: "coach" + (waiting ? " wait" : "") },
-    coachLines(text.slice(0, at).trimEnd()),
-    h("details", {}, h("summary", {}, "Термины"), text.slice(at + marker.length)),
+  const main = at < 0 ? text : text.slice(0, at).trimEnd();
+  return h("div", { class: "coach" },
+    coachCards(main),
+    at < 0 ? null : h("details", {}, h("summary", {}, "Термины"),
+      text.slice(at + marker.length).split(NEWLINE).filter((line) => line.trim()).map(coachLine)),
   );
 }
 
@@ -781,6 +944,9 @@ function parseEngineLines(fen, infoLines) {
 }
 
 const PROMOTION_NAMES = { q: "Ферзь", r: "Ладья", b: "Слон", n: "Конь" };
+
+// Телефон боком: экран шире, чем выше, и невысокий. Широкий компьютер сюда не попадает.
+const landscape = window.matchMedia("(orientation: landscape) and (max-height: 600px)");
 
 // ---------- Разбор по ходам ----------
 
@@ -828,6 +994,7 @@ function showReview(game, startPly = 0) {
     closed = true;
     clearTimeout(timer);
     scan.listeners.delete(listener);
+    landscape.removeEventListener("change", onLayout);
     document.removeEventListener("keydown", onKey);
     next();
   }
@@ -950,24 +1117,22 @@ function showReview(game, startPly = 0) {
     const legal = shown ? [] : parseLegal(fen);
     const ended = gameEnd(fen);
     const lastUci = shown ? "" : lineActive() ? (lineCursor >= 0 ? line[lineCursor].uci : "") : (ply > 0 ? positions[ply - 1].uci : "");
-    const continuationOn = store.get("continuation") !== "off";
-    const shownArrows = continuationOn ? arrows
-      : arrows.filter((a) => !LINE_STYLES.includes(a.style)).map((a) => ({ ...a, label: "" }));
     const boardArrows = shown ? [] : lineActive()
       ? (engineLines[0] ? [{ uci: engineLines[0].first, style: "BEST_MOVE" }] : [])
-      : shownArrows;
+      : arrows;
     const barScore = lineActive() ? engineLines[0]?.score : (ply > 0 ? evaluations[ply - 1] : null) || engineLines[0]?.score;
-    const usedStyles = lineActive() ? [] : [...new Set(shownArrows.map((a) => a.style === "LINE_OPPONENT_FAR" ? "LINE_OPPONENT" : a.style))];
-    // Продолжение лучшей линии по шагам: номер на стрелке — номер шага здесь.
+    const usedStyles = lineActive() ? [] : [...new Set(arrows.map((a) => a.style === "LINE_OPPONENT_FAR" ? "LINE_OPPONENT" : a.style))];
+    // Продолжение лучшей линии по шагам: номер на стрелке — номер шага здесь. Пунктир
+    // всегда, когда у линии есть ходы после первого: один ход и так видно по стрелке.
     const bestIndex = variations.findIndex((v) => v.title === "Лучший ход");
-    const continuationRow = lineActive() || bestIndex < 0 ? null : h("div", { class: "variation continuation" },
-      h("label", { class: "note" },
-        h("input", { type: "checkbox", ...(continuationOn ? { checked: "" } : {}), onchange: (event) => { store.set("continuation", event.target.checked ? "on" : "off"); render(); } }),
-        " Продолжение"),
-      continuationOn ? variations[bestIndex].san.slice(0, 4).map((san, step) => h("button", {
+    const coach = coachScores(coachText || "");
+    const playedBest = coach.verdict === "лучший ход";
+    const continuationRow = lineActive() || bestIndex < 0 || variations[bestIndex].san.length < 2 ? null : h("div", { class: "variation continuation" },
+      h("span", { class: "note" }, ply === 0 || playedBest ? "Продолжение:" : "Лучше было:"),
+      variations[bestIndex].san.slice(0, 4).map((san, step) => h("button", {
         class: shown && shown.line === bestIndex && shown.step === step ? "on" : "",
         onclick: () => { shown = shown && shown.line === bestIndex && shown.step === step ? null : { line: bestIndex, step }; selected = null; render(); },
-      }, (step + 1) + " " + figurine(san))) : null,
+      }, (step + 1) + " " + figurine(san))),
     );
     const userLine = lineActive() ? h("div", { class: "card user-line" },
       h("span", { class: "note" }, "Свой вариант"),
@@ -987,61 +1152,74 @@ function showReview(game, startPly = 0) {
     const nextMoment = moments.find((m) => m.ply + 1 > ply);
     const moment = moments.find((m) => m.ply + 1 === ply);
 
-    const left = h("div", {},
-      h("div", { class: "engine-lines" }, ended ? h("strong", {}, ended) : engineLines.map((l) => h("div", { class: "engine-line" },
-        h("span", { class: "score" }, shortScore(l.score)),
-        h("span", {}, l.san.map(figurine).join(" ")),
-      ))),
-      h("div", { class: "board-row" },
-        drawBoard(fen, flipped, lastUci, boardArrows, shown ? null : {
-          selected,
-          targets: legal.filter((m) => m.from === selected).map((m) => m.to),
-          onSquare,
-        }),
-        drawEvalBar(barScore, flipped),
-      ),
-      promotion.length ? h("div", { class: "row" }, h("span", { class: "note" }, "Превратить в:"),
-        promotion.slice().sort((a, b) => "qrbn".indexOf(a.promotion) - "qrbn".indexOf(b.promotion))
-          .map((m) => h("button", { onclick: () => playMove(m) }, PROMOTION_NAMES[m.promotion] || m.promotion))) : null,
+    const engineBlock = h("div", { class: "engine-lines" }, ended ? h("strong", {}, ended) : engineLines.map((l) => h("div", { class: "engine-line" },
+      h("span", { class: "score" }, shortScore(l.score)),
+      h("span", {}, l.san.map(figurine).join(" ")),
+    )));
+    const boardBlock = h("div", { class: "board-row" },
+      drawBoard(fen, flipped, lastUci, boardArrows, shown ? null : {
+        selected,
+        targets: legal.filter((m) => m.from === selected).map((m) => m.to),
+        onSquare,
+      }),
+      drawEvalBar(barScore, flipped),
+    );
+    const promotionBlock = promotion.length ? h("div", { class: "row" }, h("span", { class: "note" }, "Превратить в:"),
+      promotion.slice().sort((a, b) => "qrbn".indexOf(a.promotion) - "qrbn".indexOf(b.promotion))
+        .map((m) => h("button", { onclick: () => playMove(m) }, PROMOTION_NAMES[m.promotion] || m.promotion))) : null;
+    const legendBlock = usedStyles.length ? h("div", { class: "legend" }, usedStyles.map((style) => h("span", {},
+      h("i", { style: "background:" + ARROW_COLORS[style] }), ARROW_NAMES[style] || style))) : null;
+    const controls = h("div", { class: "controls" },
+      h("button", { onclick: () => previousMoment && goTo(previousMoment.ply + 1), disabled: previousMoment ? undefined : "", "aria-label": "К прошлому ключевому моменту" }, "« Момент"),
+      h("button", { onclick: () => goTo(ply - 1), "aria-label": "Назад" }, "◀"),
+      h("button", { onclick: () => goTo(ply + 1), "aria-label": "Вперёд" }, "▶"),
+      h("button", { onclick: () => nextMoment && goTo(nextMoment.ply + 1), disabled: nextMoment ? undefined : "", "aria-label": "К следующему ключевому моменту" }, "Момент »"),
+    );
+    const topBar = h("div", { class: "spread" },
+      h("button", { class: "link", onclick: () => leave(() => showRecap(game)) }, "‹ Итоги"),
+      h("span", { class: "note" }, "против " + game.opponent),
+    );
+    // Числа момента — из быстрого разбора партии: в карточке их заменяют оценки тренера.
+    const momentDetail = moment ? moment.detail.split(" · ").filter((part) => !part.includes("→")).join(" · ") : "";
+    const moveCard = ply > 0 ? h("div", { class: "card" },
+      h("strong", { class: "headline" }, headline(positions[ply - 1], evaluations[ply - 1], coachWaiting ? {} : coach)),
+      coachWaiting ? null : scoreTags(coach),
+      moment ? h("p", { class: "moment", style: "color:" + MOMENT_COLORS[moment.kind] }, moment.title.split(" — ")[1] + (momentDetail ? ": " + momentDetail : "")) : null,
+      gameEnd(positions[ply - 1].fenAfter) ? h("p", {}, h("strong", {}, gameEnd(positions[ply - 1].fenAfter))) : null,
+      coachBlock(coachText || "Тренер думает…", coachWaiting || !coachText),
+    ) : h("div", { class: "card" }, h("strong", {}, "Начальная позиция"), h("p", { class: "note" }, "Выберите ход в списке или нажмите ▶, чтобы тренер его разобрал."));
+    const variationsBlock = variations.length ? h("div", { class: "variations" }, variations.map((variation, index) => h("div", { class: "variation" },
+      h("span", { class: "note" }, variation.title + ":"),
+      variation.san.map((san, step) => h("button", {
+        class: shown && shown.line === index && shown.step === step ? "on" : "",
+        onclick: () => { shown = { line: index, step }; selected = null; render(); },
+      }, figurine(san))),
+    )), shown ? h("button", { onclick: () => { shown = null; render(); } }, "Вернуться к партии") : null) : null;
+    const scanStatus = scanBlock(scan, () => { scans.delete(game.id); leave(() => showReview(game, ply)); });
+    const graph = evaluations.length ? drawGraph(evaluations, positions.length, ply, moments, goTo) : null;
+
+    if (landscape.matches) {
+      // Телефон боком: доска слева во всю высоту, справа навигация закреплена,
+      // остальное прокручивается под ней.
+      app.replaceChildren(h("div", { class: "review landscape" },
+        h("div", { class: "board-pane" }, boardBlock),
+        h("div", { class: "side-pane" },
+          h("div", { class: "pinned" }, topBar, controls),
+          h("div", { class: "scroller" }, moveList, engineBlock, promotionBlock, userLine, continuationRow, legendBlock,
+            scanStatus, graph, moveCard, variationsBlock)),
+      ));
+    } else {
       // Свой вариант сразу под доской: внизу длинной страницы его не находили.
-      userLine,
-      continuationRow,
-      usedStyles.length ? h("div", { class: "legend" }, usedStyles.map((style) => h("span", {},
-        h("i", { style: "background:" + ARROW_COLORS[style] }), ARROW_NAMES[style] || style))) : null,
-      h("div", { class: "controls" },
-        h("button", { onclick: () => previousMoment && goTo(previousMoment.ply + 1), disabled: previousMoment ? undefined : "", "aria-label": "К прошлому ключевому моменту" }, "« Момент"),
-        h("button", { onclick: () => goTo(ply - 1), "aria-label": "Назад" }, "◀"),
-        h("button", { onclick: () => goTo(ply + 1), "aria-label": "Вперёд" }, "▶"),
-        h("button", { onclick: () => nextMoment && goTo(nextMoment.ply + 1), disabled: nextMoment ? undefined : "", "aria-label": "К следующему ключевому моменту" }, "Момент »"),
-      ),
-    );
-
-    const right = h("div", {},
-      h("div", { class: "spread" },
-        h("button", { class: "link", onclick: () => leave(() => showRecap(game)) }, "‹ Итоги"),
-        h("span", { class: "note" }, "против " + game.opponent),
-      ),
-      scanBlock(scan, () => { scans.delete(game.id); leave(() => showReview(game, ply)); }),
-      evaluations.length ? drawGraph(evaluations, positions.length, ply, moments, goTo) : null,
-      moveList,
-      ply > 0 ? h("div", { class: "card" },
-        h("strong", { class: "headline" }, headline(positions[ply - 1], ply > 1 ? evaluations[ply - 2] : null, evaluations[ply - 1])),
-        moment ? h("p", { class: "moment", style: "color:" + MOMENT_COLORS[moment.kind] }, moment.title.split(" — ")[1] + ": " + moment.detail) : null,
-        gameEnd(positions[ply - 1].fenAfter) ? h("p", {}, h("strong", {}, gameEnd(positions[ply - 1].fenAfter))) : null,
-        coachBlock(coachText || "Тренер думает…", coachWaiting || !coachText),
-      ) : h("div", { class: "card" }, h("strong", {}, "Начальная позиция"), h("p", { class: "note" }, "Выберите ход в списке или нажмите ▶, чтобы тренер его разобрал.")),
-      variations.length ? h("div", { class: "variations" }, variations.map((variation, index) => h("div", { class: "variation" },
-        h("span", { class: "note" }, variation.title + ":"),
-        variation.san.map((san, step) => h("button", {
-          class: shown && shown.line === index && shown.step === step ? "on" : "",
-          onclick: () => { shown = { line: index, step }; selected = null; render(); },
-        }, figurine(san))),
-      )), shown ? h("button", { onclick: () => { shown = null; render(); } }, "Вернуться к партии") : null) : null,
-    );
-
-    app.replaceChildren(h("div", { class: "review" }, left, right));
+      const left = h("div", {}, engineBlock, boardBlock, promotionBlock, userLine, continuationRow, legendBlock, controls);
+      const right = h("div", {}, topBar, scanStatus, graph, moveList, moveCard, variationsBlock);
+      app.replaceChildren(h("div", { class: "review" }, left, right));
+    }
     moveList.querySelector(".on")?.scrollIntoView({ block: "nearest" });
   }
+
+  // Поворот телефона перестраивает экран, но не сбрасывает ход и вариант.
+  const onLayout = () => { if (!closed) render(); };
+  landscape.addEventListener("change", onLayout);
 
   function onKey(event) {
     if (event.target.tagName === "INPUT") return;

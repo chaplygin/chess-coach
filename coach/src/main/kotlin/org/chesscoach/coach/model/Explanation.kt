@@ -127,6 +127,23 @@ data class HumanMove(
     val kind: NaturalMove = NaturalMove.OTHER,
     /** Ход компьютера тихий: не берёт, не шахует и не развивает фигуру. */
     val computerQuiet: Boolean = false,
+    /** Человек сыграл бы то же, что компьютер: заметнее хода нет. */
+    val sameAsComputer: Boolean = false,
+)
+
+/**
+ * Своё взятие, проверенное движком: на доске фигура висит, но взять её может
+ * быть нельзя — соперник ответит ударом посильнее.
+ */
+data class CaptureCheck(
+    val square: com.github.bhlangonijr.chesslib.Square,
+    val moveSan: String,
+    val scoreFromWhite: org.chesscoach.core.Score?,
+    val lossVsBestCentipawns: Int,
+    /** Лучший ответ соперника после взятия. */
+    val replySan: String? = null,
+    /** Что этим ответом берёт соперник. */
+    val replyTakes: com.github.bhlangonijr.chesslib.PieceType? = null,
 )
 
 /** Что делает ход, который человек находит сразу. Порядок — от самого заметного. */
@@ -222,6 +239,8 @@ sealed interface Section {
         val advice: List<CheckedAdvice> = emptyList(),
         /** Свои маты в один ход записью SAN. */
         val mates: List<String> = emptyList(),
+        /** Взятия из [captures], проверенные движком. */
+        val captureChecks: List<CaptureCheck> = emptyList(),
     ) : Section
 
     /**

@@ -152,7 +152,7 @@ input {
 .cls-MISTAKE { color: var(--mistake); font-weight: 600; }
 .cls-BLUNDER { color: var(--blunder); font-weight: 700; }
 
-.coach { white-space: pre-wrap; overflow-wrap: anywhere; padding: 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; min-height: 120px; }
+.coach { overflow-wrap: anywhere; }
 .coach.wait { color: var(--muted); }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 13px; color: var(--muted); margin: 6px 0; }
 .legend i { display: inline-block; width: 12px; height: 4px; margin-right: 4px; vertical-align: middle; }
@@ -197,7 +197,6 @@ button.wide { width: 100%; margin: 12px 0; }
 .engine-line .score { flex: none; padding: 0 5px; border-radius: 4px; background: #3a3a3c; color: #fff; font-size: 12px; }
 .headline { display: block; font-size: 17px; margin-bottom: 6px; }
 .moment { margin: 0 0 8px; font-size: 14px; }
-.card .coach { border: 0; padding: 0; min-height: 0; background: transparent; }
 .user-line .variation { margin: 6px 0; }
 .user-line .eval { font-size: 12px; color: var(--muted); }
 
@@ -208,12 +207,53 @@ main {
   padding-bottom: max(16px, env(safe-area-inset-bottom));
 }
 
-/* Заголовки групп разбора: до хода, ход, после хода. */
-.coach .group-title { display: inline-block; margin-top: 4px; color: var(--accent); letter-spacing: 0.02em; }
+/* Разбор хода: группы карточками, разделы жирным, пункты буллитами. Как в приложении. */
+.coach { white-space: normal; display: flex; flex-direction: column; gap: 10px; font-size: 16px; line-height: 1.45; }
+.coach.wait { white-space: pre-wrap; display: block; }
+.card .coach { margin-top: 10px; }
+.coach-card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+.card .coach-card { background: var(--bg); }
+.coach-card.move { border: 2px solid var(--accent); }
+.coach-head { display: flex; align-items: center; gap: 8px; font-size: 17px; margin-bottom: 4px; }
+.coach-head strong { flex: 1; }
+.coach-card.move .coach-head { color: var(--accent); }
+.coach-head .icon { font-size: 18px; color: var(--muted); }
+.coach-card.move .coach-head .icon { color: var(--accent); }
+.section-title { font-weight: 700; margin: 10px 0 2px; }
+.section-title.bad { color: var(--blunder); }
+.section-title.good { color: var(--best); }
+.bullet { display: flex; gap: 6px; margin: 2px 0; }
+.bullet .dot-mark { flex: none; width: 12px; color: var(--muted); }
+.bullet.level-1 { margin-left: 18px; font-size: 15px; }
+.bullet.level-2 { margin-left: 36px; font-size: 15px; }
+.bullet.bad-line { color: var(--blunder); }
+.bullet.muted { color: var(--muted); }
+.label { font-weight: 600; }
+.mv { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; font-size: 14px; background: var(--line); border-radius: 4px; padding: 0 3px; }
+.tag { display: inline-block; font-size: 13px; padding: 0 7px; border-radius: 6px; background: var(--line); color: var(--muted); font-weight: 400; }
+.tag.bad { background: rgba(192, 57, 43, 0.14); color: var(--blunder); }
+.tag.good { background: rgba(47, 125, 85, 0.14); color: var(--best); }
+.tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 8px; }
 
 /* Продолжение лучшей линии под доской. */
 .continuation { margin: 6px 0; }
-.continuation label { display: inline-flex; align-items: center; gap: 4px; margin-right: 6px; }
+
+/* Кнопки навигации не обрезают подписи на узком экране. */
+.controls button { padding: 8px 4px; white-space: nowrap; }
+
+/* Телефон боком: доска во всю высоту слева, справа закреплённая навигация и прокрутка. */
+.review.landscape { grid-template-columns: auto minmax(0, 1fr); gap: 12px; height: calc(100dvh - 24px); }
+.landscape .board-pane { height: 100%; }
+.landscape .board-row { width: calc(100dvh - 24px + 26px); height: calc(100dvh - 24px); }
+.landscape .side-pane { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+.landscape .pinned { flex: none; }
+.landscape .pinned .controls { margin: 4px 0; }
+.landscape .scroller { flex: 1; min-height: 0; overflow-y: auto; }
+.landscape .moves { max-height: 120px; }
+@media (orientation: landscape) and (max-height: 600px) {
+  .top, .foot { display: none; }
+  main { padding-top: 8px; padding-bottom: 8px; }
+}
 
 /* Мои ошибки. */
 .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 4px; }

@@ -1,9 +1,12 @@
 package org.chesscoach.coach.text
 
 import com.github.bhlangonijr.chesslib.Piece
+import com.github.bhlangonijr.chesslib.PieceType
 import com.github.bhlangonijr.chesslib.Side
 import com.github.bhlangonijr.chesslib.Square
+import org.chesscoach.coach.model.CaptureCheck
 import org.chesscoach.coach.model.Evidence
+import org.chesscoach.coach.model.NaturalMove
 import org.chesscoach.coach.model.FeatureSet
 import org.chesscoach.coach.model.ForkFact
 import org.chesscoach.coach.model.HangingPieceFact
@@ -104,7 +107,7 @@ class TextRendererNewSectionsTest {
 
         // Список пунктов одинаков от позиции к позиции: иначе читатель не
         // знает, что тренер проверил, а что молча пропустил.
-        assertTrue(text, text.contains("ПЛАН СОПЕРНИКА"))
+        assertTrue(text, text.contains("План соперника"))
         assertTrue(text, text.contains("1. Шахи и маты: нет."))
         assertTrue(text, text.contains("2. Взятия: нет."))
         assertTrue(text, text.contains("3. Активные ходы: король"))
@@ -114,7 +117,7 @@ class TextRendererNewSectionsTest {
     fun `my position with nothing at all still answers every item`() {
         val text = TextRenderer.render(explanation(listOf(Section.MyPosition(emptyList(), emptyList()))), viewer = Side.BLACK)
 
-        assertTrue(text, text.contains("ПЛАН СОПЕРНИКА"))
+        assertTrue(text, text.contains("План соперника"))
         assertTrue(text, text.contains("1. Шахи и маты: нет."))
         assertTrue(text, text.contains("2. Взятия: нет."))
         assertTrue(text, text.contains("3. Активные ходы: нет."))
@@ -217,7 +220,7 @@ class TextRendererNewSectionsTest {
         )
         val text = TextRenderer.render(explanation(listOf(Section.MyAttack(emptyList(), listOf(fork), emptyList()))), viewer = Side.BLACK)
 
-        assertTrue(text, text.contains("МОЙ ПЛАН"))
+        assertTrue(text, text.contains("Мой план"))
         assertTrue(text, text.contains("2. Взятия:"))
         assertTrue(text, text.contains("вилкой нападает"))
     }
@@ -226,7 +229,7 @@ class TextRendererNewSectionsTest {
     fun `my attack with nothing at all still answers every item`() {
         val text = TextRenderer.render(explanation(listOf(Section.MyAttack(emptyList(), emptyList(), emptyList()))), viewer = Side.BLACK)
 
-        assertTrue(text, text.contains("МОЙ ПЛАН"))
+        assertTrue(text, text.contains("Мой план"))
         assertTrue(text, text.contains("1. Шахи и маты: нет."))
         assertTrue(text, text.contains("2. Взятия: нет."))
         assertTrue(text, text.contains("3. Активные ходы: нет."))
@@ -249,8 +252,8 @@ class TextRendererNewSectionsTest {
 
         assertTrue(text, text.contains("Ключевой момент"))
         assertTrue(text, text.contains("Оценка до хода: +0.4"))
-        assertTrue(text, text.contains("Оценка после хода Nd4: +3.2 (дельта +2.9)"))
-        assertTrue(text, text.contains("Оценка была бы после лучшего хода Rfe8: +0.4 (дельта была бы 0.0)"))
+        assertTrue(text, text.contains("Оценка после хода Nd4: +3.2, потеря 2.9"))
+        assertTrue(text, text.contains("Оценка после лучшего хода Rfe8 была бы +0.4, потеря 0.0"))
         assertTrue(text, text.contains("Коротко: Nd4 — зевок"))
         assertFalse(text, text.contains("Вопрос на будущее"))
     }
@@ -276,8 +279,8 @@ class TextRendererNewSectionsTest {
     fun `best moves show the engine line and say when the human move is the same`() {
         val text = TextRenderer.render(explanation(listOf(Section.BestMoves(listOf("Rfe8", "Bd3")))))
 
-        assertTrue(text, text.contains("ЛУЧШИЙ ХОД"))
-        assertTrue(text, text.contains("Компьютер: Rfe8 Bd3."))
+        assertTrue(text, text.contains("Лучший ход"))
+        assertTrue(text, text.contains("Компьютер: Rfe8 Bd3 (оценка +0.4)."))
         assertFalse(text, text.contains("Человек"))
     }
 
@@ -286,7 +289,7 @@ class TextRendererNewSectionsTest {
         val human = HumanMove(listOf("Bd6", "Bd3"), 30, emptyList())
         val text = TextRenderer.render(explanation(listOf(Section.BestMoves(listOf("Rfe8"), human))))
 
-        assertTrue(text, text.contains("Человек: Bd6 Bd3 (слабее лучшего на 0.3)."))
+        assertTrue(text, text.contains("Человек: Bd6 Bd3 (слабее лучшего, потеря 0.3)."))
         assertTrue(text, text.contains("Разница: Bd6 проще найти"))
     }
 
@@ -296,7 +299,41 @@ class TextRendererNewSectionsTest {
         val text = TextRenderer.render(explanation(listOf(Section.BestMoves(listOf("Rfe8"), human))))
 
         assertTrue(text, text.contains("(равноценно лучшему)"))
-        assertFalse(text, text.contains("слабее лучшего на 0.0"))
+        assertFalse(text, text.contains("потеря 0.0"))
+    }
+
+    @Test
+    fun `the human line is there even when the human plays the computer move`() {
+        val human = HumanMove(listOf("Rfe8"), 0, emptyList(), kind = NaturalMove.CAPTURE, sameAsComputer = true)
+        val text = TextRenderer.render(explanation(listOf(Section.BestMoves(listOf("Rfe8"), human))))
+
+        assertTrue(text, text.contains("Человек: тот же Rfe8, его видно сразу — это взятие."))
+    }
+
+    // ——— Цифры и порядок в планах ———
+
+    @Test
+    fun `captures in the opponent plan carry their price and the dearest goes first`() {
+        val knight = HangingPieceFact(Square.D4, Piece.BLACK_KNIGHT, 300, Side.WHITE, Evidence.of(Square.D4))
+        val queen = HangingPieceFact(Square.D6, Piece.BLACK_QUEEN, 600, Side.WHITE, Evidence.of(Square.D6))
+        val text = TextRenderer.render(explanation(listOf(Section.MyPosition(emptyList(), listOf(knight, queen)))), viewer = Side.BLACK)
+
+        assertTrue(text, text.contains("Ферзь на d6 под боем. (-6 для вас)"))
+        assertTrue(text, text.indexOf("Ферзь на d6") < text.indexOf("Конь на d4"))
+    }
+
+    @Test
+    fun `a capture the engine refutes says what the opponent answers and goes last`() {
+        val pawn = HangingPieceFact(Square.D5, Piece.WHITE_PAWN, 100, Side.BLACK, Evidence.of(Square.D5))
+        val knight = HangingPieceFact(Square.F3, Piece.WHITE_KNIGHT, 200, Side.BLACK, Evidence.of(Square.F3))
+        val refuted = CaptureCheck(Square.F3, "exf3", Score.Cp(260), 650, "Nxd6", PieceType.QUEEN)
+        val fine = CaptureCheck(Square.D5, "Nxd5", Score.Cp(-30), 10)
+        val attack = Section.MyAttack(emptyList(), listOf(knight, pawn), emptyList(), captureChecks = listOf(refuted, fine))
+        val text = TextRenderer.render(explanation(listOf(attack)), viewer = Side.BLACK)
+
+        assertTrue(text, text.contains("Но после exf3 белые отвечают Nxd6 и берут ферзя (оценка +2.6)."))
+        assertTrue(text, text.contains("(+1 для вас, оценка -0.3)"))
+        assertTrue(text, text.indexOf("Пешка на d5") < text.indexOf("Конь на f3"))
     }
 
     // ——— ПОЧЕМУ ТАКАЯ ОЦЕНКА ———
@@ -312,7 +349,7 @@ class TextRendererNewSectionsTest {
         )
         val text = TextRenderer.render(explanation(listOf(reason)))
 
-        assertTrue(text, text.contains(TextRenderer.GROUP_MARK + " ПОЗИЦИЯ"))
+        assertTrue(text, text.contains(TextRenderer.GROUP_MARK + " Позиция"))
         assertTrue(text, text.contains("В варианте exf4 Nxf4 Bxd1 Qxd1 чёрные выигрывают материал, около двух пешек."))
     }
 
@@ -320,7 +357,7 @@ class TextRendererNewSectionsTest {
     fun `no leader means the reason says so instead of inventing one`() {
         val text = TextRenderer.render(explanation(listOf(Section.EvalReason(0, null, listOf("e4")))))
 
-        assertTrue(text, text.contains("Материал равный. Перевеса нет"))
+        assertTrue(text, text.contains("Материал равный." + System.lineSeparator() + TextRenderer.BULLET + "Перевеса нет"))
     }
 
     @Test
@@ -345,7 +382,7 @@ class TextRendererNewSectionsTest {
         )
         val text = TextRenderer.render(explanation(listOf(section)))
 
-        assertTrue(text, text.contains("СЫГРАННЫЙ ХОД: Rfe8 — лучший"))
+        assertTrue(text, text.contains("Сыгранный ход: Rfe8 — лучший"))
         assertTrue(text, text.contains("Сыгран лучший ход."))
     }
 
@@ -371,8 +408,8 @@ class TextRendererNewSectionsTest {
         )
         val text = TextRenderer.render(explanation(listOf(best, played)))
 
-        assertTrue(text, text.contains("ПОЧЕМУ Rfe8 (= сыгранный)"))
-        assertFalse(text, text.contains("СЫГРАННЫЙ ХОД"))
+        assertTrue(text, text.contains("Почему Rfe8 (= сыгранный)"))
+        assertFalse(text, text.contains("Сыгранный ход"))
     }
 
     @Test

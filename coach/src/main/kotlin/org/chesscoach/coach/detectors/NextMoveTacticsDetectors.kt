@@ -13,6 +13,9 @@ import org.chesscoach.coach.model.RemoveDefenderFact
 
 /** Законные ходы стороны [side], даже если сейчас очередь соперника. Пусто, если её король под шахом. */
 internal fun legalMovesFor(board: Board, side: Side): List<Move> {
+    // Сторона на очереди под шахом: ходить за соперника ей нельзя, иначе среди
+    // его "ходов" окажется взятие короля, и доска без короля роняет chesslib.
+    if (board.sideToMove != side && board.isKingAttacked) return emptyList()
     val working = board.clone()
     if (working.sideToMove != side) {
         working.sideToMove = side
@@ -20,7 +23,7 @@ internal fun legalMovesFor(board: Board, side: Side): List<Move> {
         working.enPassantTarget = Square.NONE
     }
     if (working.isKingAttacked) return emptyList()
-    return working.legalMoves()
+    return working.legalMoves().filter { working.getPiece(it.to).pieceType != PieceType.KING }
 }
 
 /** Ход на копии доски. Стороне не обязательно быть на очереди. */

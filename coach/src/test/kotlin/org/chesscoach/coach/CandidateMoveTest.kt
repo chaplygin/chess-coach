@@ -48,7 +48,7 @@ class CandidateMoveTest {
         assertTrue(result.toString(), result is CandidateResult.Explained)
         val explained = result as CandidateResult.Explained
         assertEquals("g1f3", explained.uci)
-        assertTrue(explained.text, explained.text.startsWith("ВАШ ВАРИАНТ: Nf3"))
+        assertTrue(explained.text, explained.text.startsWith(org.chesscoach.coach.text.TextRenderer.SECTION_MARK + "Ваш вариант: Nf3"))
         // Именно сравнение с лучшим — ради него весь разбор и затевается.
         assertTrue(explained.text, explained.text.contains("Лучше e4"))
     }

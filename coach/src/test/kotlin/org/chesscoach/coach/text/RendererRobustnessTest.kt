@@ -54,7 +54,7 @@ class RendererRobustnessTest {
             ),
         )
 
-        assertTrue(text, text.contains("ПОЧЕМУ"))
+        assertTrue(text, text.contains("Почему"))
         assertTrue(text, text.contains("Ng5".let(SanRuFormatter::move)))
     }
 

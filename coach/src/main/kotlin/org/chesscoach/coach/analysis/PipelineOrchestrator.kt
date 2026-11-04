@@ -3,7 +3,9 @@ package org.chesscoach.coach.analysis
 import com.github.bhlangonijr.chesslib.Board
 import com.github.bhlangonijr.chesslib.Piece
 import com.github.bhlangonijr.chesslib.Side
+import com.github.bhlangonijr.chesslib.Square
 import com.github.bhlangonijr.chesslib.move.Move
+import org.chesscoach.coach.model.CaptureCheck
 import org.chesscoach.coach.engine.CoachSearchLimits
 import org.chesscoach.coach.engine.EngineClient
 import org.chesscoach.coach.engine.NullMoveUtil
@@ -78,8 +80,7 @@ class PipelineOrchestrator(
         /** Вариант разобранного хода длиннее: он и есть объяснение. */
         const val PLAYED_LINE_PLIES = 6
 
-        /** С этой потери ход не называем советом: разница больше неточности. */
-        const val ADVICE_MAX_LOSS_CP = 50
+        const val ADVICE_MAX_LOSS_CP = CoachThresholds.ADVICE_MAX_LOSS_CP
 
         /** Потеря к концу варианта, при которой пойманная фигура действительно теряется. */
         const val TRAPPED_LOSS_CP = 200
@@ -131,6 +132,7 @@ class PipelineOrchestrator(
         val previous = previousMove(previousFen, previousMoveUci, fen, featuresBefore, sideToMove)
         sections += myPositionSection(fen, featuresBefore, sideToMove, threat, opponentAdvice(fen, featuresBefore, sideToMove), previous)
         sections += myAttackSection(fen, featuresBefore, sideToMove, ownAdvice(fen, featuresBefore, sideToMove, bestLine), bestLine)
+            .let { attack -> attack.copy(captureChecks = captureChecks(fen, attack.captures, sideToMove, bestLine)) }
 
         // 4. Почему лучший ход хорош, профилактика и разбор сыгранного хода
         // в сравнении с лучшим.
@@ -381,7 +383,7 @@ class PipelineOrchestrator(
         mover: Side,
         advice: List<CheckedAdvice>,
         bestLine: EngineLine?,
-    ): Section {
+    ): Section.MyAttack {
         val mine = features.favouring(mover)
         val matesInOne = MatingMoves.of(fen, mover)
         // Мат в один ход виден по доске и назван поимённо; дальний мат знает только движок.
@@ -490,6 +492,46 @@ class PipelineOrchestrator(
         val loss = ScoreFormat.centipawnLoss(bestLine.score, score)
         if (loss >= ADVICE_MAX_LOSS_CP && !isTraded(fact)) return@mapNotNull null
         CheckedAdvice(fact, ScoreFormat.toWhitePerspective(score, mover))
+    }
+
+    /**
+     * Свои взятия висящих фигур тоже проверяет движок: детектор считает размен
+     * только на одном поле и не видит, что у самого берущего висит ферзь.
+     */
+    private suspend fun captureChecks(
+        fen: String,
+        captures: List<Fact>,
+        mover: Side,
+        bestLine: EngineLine?,
+    ): List<CaptureCheck> {
+        if (bestLine == null) return emptyList()
+        val board = Board()
+        if (!runCatching { board.loadFromFen(fen) }.isSuccess) return emptyList()
+        return captures.filterIsInstance<HangingPieceFact>().mapNotNull { fact ->
+            val from = fact.firstAttacker ?: return@mapNotNull null
+            val promotes = board.getPiece(from).pieceType == com.github.bhlangonijr.chesslib.PieceType.PAWN &&
+                (fact.square.rank == com.github.bhlangonijr.chesslib.Rank.RANK_8 || fact.square.rank == com.github.bhlangonijr.chesslib.Rank.RANK_1)
+            val uci = from.value().lowercase() + fact.square.value().lowercase() + if (promotes) "q" else ""
+            val after = applyUciMove(fen, uci) ?: return@mapNotNull null
+            val (score, reply) = if (bestLine.pv.firstOrNull() == uci) {
+                bestLine.score to bestLine.pv.getOrNull(1)
+            } else {
+                val line = engineClient.analyse(after, ADVICE_LIMITS).firstOrNull() ?: return@mapNotNull null
+                ScoreFormat.negate(line.score) to line.pv.firstOrNull()
+            }
+            val afterBoard = Board().also { it.loadFromFen(after) }
+            val replyTakes = reply?.takeIf { it.length >= 4 }?.let {
+                afterBoard.getPiece(Square.valueOf(it.substring(2, 4).uppercase())).pieceType
+            }
+            CaptureCheck(
+                square = fact.square,
+                moveSan = MoveNotation.uciToSanOrRaw(fen, listOf(uci)).first(),
+                scoreFromWhite = ScoreFormat.toWhitePerspective(score, mover),
+                lossVsBestCentipawns = ScoreFormat.centipawnLoss(bestLine.score, score),
+                replySan = reply?.let { MoveNotation.uciToSanOrRaw(after, listOf(it)).first() },
+                replyTakes = replyTakes,
+            )
+        }
     }
 
     /** Удары соперника проверяются так же, но на доске с его очередью: оценку поэтому не показываем. */
@@ -609,7 +651,15 @@ class PipelineOrchestrator(
         val quickFirst = quickLines.sortedBy { it.multiPvIndex }.firstOrNull()?.pv?.firstOrNull()
         val (line, kind) = natural
             ?: close.firstOrNull { it.pv.first() == quickFirst }?.let { it to naturalKind(fen, it.pv.first()) }
-            ?: return null
+            // Заметнее хода компьютера нет: человек сыграл бы его же, и это тоже ответ.
+            ?: return HumanMove(
+                lineSan = MoveNotation.uciToSanOrRaw(fen, bestLine.pv.take(1)),
+                lossVsBestCentipawns = 0,
+                facts = emptyList(),
+                kind = bestKind,
+                computerQuiet = bestKind == NaturalMove.OTHER,
+                sameAsComputer = true,
+            )
         val uci = line.pv.first()
         val loss = ScoreFormat.centipawnLoss(bestLine.score, line.score)
 

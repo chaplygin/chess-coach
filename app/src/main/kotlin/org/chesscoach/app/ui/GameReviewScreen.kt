@@ -22,7 +22,6 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -45,13 +44,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.withStyle
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.material3.Switch
 import org.chesscoach.coach.model.Section
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -234,25 +228,25 @@ fun GameReviewScreen(
         selectedSquare = square.takeIf { tapped -> legalMoves.any { it.from == tapped } && tapped != selected }
     }
 
-    val context = LocalContext.current
-    var showContinuation by remember { mutableStateOf(continuationEnabled(context)) }
-    val arrows = remember(explanation, engineLines, lineActive, showContinuation) {
+    // Продолжение лучшей линии по шагам: номер на стрелке — номер шага здесь.
+    // Пунктир рисуется всегда, когда у линии есть ходы после первого.
+    val continuation = remember(explanation) { explanation?.let(::continuationSteps).orEmpty() }
+    val arrows = remember(explanation, engineLines, lineActive, continuation) {
         when {
             lineActive -> engineLines.firstOrNull()?.let { listOf(BoardArrow(it.firstUci.take(2), it.firstUci.substring(2, 4), ArrowStyle.BEST_MOVE)) }.orEmpty()
             else -> explanation?.let { e ->
-                BoardMarks.of(e).let { if (showContinuation) BoardMarks.withContinuation(it, e) else it }
+                BoardMarks.of(e).let { if (continuation.size > 1) BoardMarks.withContinuation(it, e) else it }
             }.orEmpty()
         }
     }
-    // Продолжение лучшей линии по шагам: номер на стрелке — номер шага здесь.
-    val continuation = remember(explanation) { explanation?.let(::continuationSteps).orEmpty() }
     val coachText = remember(explanation) { explanation?.let { TextRenderer.render(it, viewer, scoreLines = false) } }
     val coachVariations = remember(explanation) { explanation?.let(Variations::of).orEmpty() }
+    val playedBest = explanation?.section<Section.PlayedMove>()?.matchesBest == true
 
-    Column(
-        modifier = Modifier.fillMaxSize().background(Palette.background).padding(horizontal = 12.dp, vertical = 6.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
+    // Доска разворачивается так, как её видел игрок за своими фигурами.
+    val flipped = game.myColor == PlayerColor.BLACK
+
+    val header: @Composable () -> Unit = {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -261,123 +255,162 @@ fun GameReviewScreen(
             TextButton(onClick = onBack) { Text("‹ Итоги") }
             Text("против " + game.opponent.name, style = MaterialTheme.typography.bodySmall, color = Palette.secondaryText)
         }
+    }
 
-        EngineLinesHeader(engineLines, GameEnd.of(displayedFen))
-
-        // Доска разворачивается так, как её видел игрок за своими фигурами.
-        val flipped = game.myColor == PlayerColor.BLACK
-        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-            val boardSize = maxWidth - EVAL_BAR_WIDTH - EVAL_BAR_GAP
-            Row(
-                modifier = Modifier.fillMaxWidth().height(boardSize),
-                horizontalArrangement = Arrangement.spacedBy(EVAL_BAR_GAP),
-            ) {
-                val lastMove = when {
-                    coachVariationFen != null -> null
-                    lineActive && lineCursor >= 0 -> line[lineCursor].uci
-                    lineActive -> null
-                    else -> positions.getOrNull(currentPly)?.uci
-                }
-                ChessBoard(
-                    fen = displayedFen,
-                    modifier = Modifier.width(boardSize),
-                    flipped = flipped,
-                    lastMoveFrom = lastMove?.take(2),
-                    lastMoveTo = lastMove?.substring(2, 4),
-                    arrows = if (coachVariationFen == null) arrows else emptyList(),
-                    selectedSquare = selectedSquare,
-                    targetSquares = legalMoves.filter { it.from == selectedSquare }.map { it.to }.toSet(),
-                    onSquareTap = if (coachVariationFen == null) ::onSquareTap else null,
-                )
-                EvalBar(
-                    score = when {
-                        lineActive -> engineLines.firstOrNull()?.scoreFromWhite
-                        else -> evaluationsByPly[currentPly]?.scoreAfterWhite ?: engineLines.firstOrNull()?.scoreFromWhite
-                    },
-                    flipped = flipped,
-                    modifier = Modifier.width(EVAL_BAR_WIDTH).fillMaxHeight(),
-                )
-            }
-        }
-
-        Column(
-            modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+    val board: @Composable (androidx.compose.ui.unit.Dp) -> Unit = { boardSize ->
+        Row(
+            modifier = Modifier.height(boardSize).width(boardSize + EVAL_BAR_WIDTH + EVAL_BAR_GAP),
+            horizontalArrangement = Arrangement.spacedBy(EVAL_BAR_GAP),
         ) {
-            // Свой вариант сразу под доской: внизу длинной страницы его не находили.
-            if (lineActive) {
-                UserLineStrip(
-                    line = line,
-                    cursor = lineCursor,
-                    onSelect = { lineCursor = it; lineExplanation = null },
-                    onExplain = { explainRequest = line.getOrNull(lineCursor) },
-                    onBackToGame = {
-                        line = emptyList()
-                        lineCursor = -1
-                        lineExplanation = null
-                    },
-                )
-                lineExplanation?.let { GroupCard { CoachText(it) } }
-            } else {
-                Text(
-                    "Свой вариант: нажмите на фигуру, потом на поле. Ходить можно за обе стороны.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Palette.secondaryText,
-                )
-                ContinuationRow(
-                    steps = continuation,
-                    enabled = showContinuation,
-                    shownFen = coachVariationFen,
-                    onToggle = {
-                        showContinuation = it
-                        saveContinuation(context, it)
-                    },
-                    onShow = { coachVariationFen = it },
-                )
-                ArrowLegend(arrows)
+            val lastMove = when {
+                coachVariationFen != null -> null
+                lineActive && lineCursor >= 0 -> line[lineCursor].uci
+                lineActive -> null
+                else -> positions.getOrNull(currentPly)?.uci
             }
-
-            ScanProgress(scan)
-
-            MoveStrip(
-                positions = positions,
-                currentPly = currentPly,
-                state = movesState,
-                evaluationsByPly = evaluationsByPly,
-                myColor = game.myColor,
-                onSelect = { currentPly = it },
+            ChessBoard(
+                fen = displayedFen,
+                modifier = Modifier.width(boardSize),
+                flipped = flipped,
+                lastMoveFrom = lastMove?.take(2),
+                lastMoveTo = lastMove?.substring(2, 4),
+                arrows = if (coachVariationFen == null) arrows else emptyList(),
+                selectedSquare = selectedSquare,
+                targetSquares = legalMoves.filter { it.from == selectedSquare }.map { it.to }.toSet(),
+                onSquareTap = if (coachVariationFen == null) ::onSquareTap else null,
             )
-
-            EvalGraphBar(
-                evaluations = scan.evaluations,
-                totalPlies = positions.size,
-                currentPly = currentPly,
-                moments = moments,
-                onSelect = { currentPly = it },
+            EvalBar(
+                score = when {
+                    lineActive -> engineLines.firstOrNull()?.scoreFromWhite
+                    else -> evaluationsByPly[currentPly]?.scoreAfterWhite ?: engineLines.firstOrNull()?.scoreFromWhite
+                },
+                flipped = flipped,
+                modifier = Modifier.width(EVAL_BAR_WIDTH).fillMaxHeight(),
             )
+        }
+    }
 
-            MoveNavigation(
-                currentPly = currentPly,
-                lastPly = positions.lastIndex,
-                moments = moments,
-                onGo = { currentPly = it },
+    // Свой вариант сразу под доской: внизу длинной страницы его не находили.
+    val underBoard: @Composable () -> Unit = {
+        if (lineActive) {
+            UserLineStrip(
+                line = line,
+                cursor = lineCursor,
+                onSelect = { lineCursor = it; lineExplanation = null },
+                onExplain = { explainRequest = line.getOrNull(lineCursor) },
+                onBackToGame = {
+                    line = emptyList()
+                    lineCursor = -1
+                    lineExplanation = null
+                },
             )
-
-            AdviceCard(
-                ply = positions.getOrNull(currentPly),
-                before = evaluationsByPly[currentPly - 1]?.scoreAfterWhite,
-                evaluation = evaluationsByPly[currentPly],
-                moment = moments.firstOrNull { it.ply == currentPly },
-                coachText = coachText,
-                thinking = thinking,
-                error = engineError,
+            lineExplanation?.let { CoachText(it) }
+        } else {
+            Text(
+                "Свой вариант: нажмите на фигуру, потом на поле. Ходить можно за обе стороны.",
+                style = MaterialTheme.typography.bodySmall,
+                color = Palette.secondaryText,
             )
-
-            VariationStrips(
-                variations = coachVariations,
+            ContinuationRow(
+                steps = continuation,
+                label = if (playedBest || explanation?.playedMoveSan == null) "Продолжение:" else "Лучше было:",
                 shownFen = coachVariationFen,
                 onShow = { coachVariationFen = it },
             )
+            ArrowLegend(arrows)
+        }
+    }
+
+    val strip: @Composable () -> Unit = {
+        MoveStrip(
+            positions = positions,
+            currentPly = currentPly,
+            state = movesState,
+            evaluationsByPly = evaluationsByPly,
+            myColor = game.myColor,
+            onSelect = { currentPly = it },
+        )
+    }
+    val graph: @Composable () -> Unit = {
+        EvalGraphBar(
+            evaluations = scan.evaluations,
+            totalPlies = positions.size,
+            currentPly = currentPly,
+            moments = moments,
+            onSelect = { currentPly = it },
+        )
+    }
+    val navigation: @Composable () -> Unit = {
+        MoveNavigation(
+            currentPly = currentPly,
+            lastPly = positions.lastIndex,
+            moments = moments,
+            onGo = { currentPly = it },
+        )
+    }
+    val coach: @Composable () -> Unit = {
+        AdviceCard(
+            ply = positions.getOrNull(currentPly),
+            evaluation = evaluationsByPly[currentPly],
+            moment = moments.firstOrNull { it.ply == currentPly },
+            explanation = explanation,
+            coachText = coachText,
+            thinking = thinking,
+            error = engineError,
+        )
+        VariationStrips(
+            variations = coachVariations,
+            shownFen = coachVariationFen,
+            onShow = { coachVariationFen = it },
+        )
+    }
+
+    BoxWithConstraints(Modifier.fillMaxSize().background(Palette.background)) {
+        if (maxWidth > maxHeight) {
+            // Горизонтально: доска слева во всю высоту, справа навигация закреплена,
+            // а всё остальное прокручивается под ней.
+            val boardSize = maxHeight - 12.dp
+            Row(
+                Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                board(boardSize)
+                Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    header()
+                    strip()
+                    navigation()
+                    Column(
+                        modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        EngineLinesHeader(engineLines, GameEnd.of(displayedFen))
+                        underBoard()
+                        ScanProgress(scan)
+                        graph()
+                        coach()
+                    }
+                }
+            }
+        } else {
+            Column(
+                modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                header()
+                EngineLinesHeader(engineLines, GameEnd.of(displayedFen))
+                board(this@BoxWithConstraints.maxWidth - 24.dp - EVAL_BAR_WIDTH - EVAL_BAR_GAP)
+                Column(
+                    modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    underBoard()
+                    ScanProgress(scan)
+                    strip()
+                    graph()
+                    navigation()
+                    coach()
+                }
+            }
         }
     }
 
@@ -404,17 +437,6 @@ fun GameReviewScreen(
 /** Шаг продолжения лучшей линии: номер как на стрелке, ход и позиция после него. */
 private data class ContinuationStep(val number: Int, val san: String, val fenAfter: String)
 
-private const val PREFS_REVIEW = "review"
-private const val KEY_CONTINUATION = "continuation"
-
-private fun continuationEnabled(context: android.content.Context): Boolean =
-    context.getSharedPreferences(PREFS_REVIEW, android.content.Context.MODE_PRIVATE).getBoolean(KEY_CONTINUATION, true)
-
-private fun saveContinuation(context: android.content.Context, enabled: Boolean) {
-    context.getSharedPreferences(PREFS_REVIEW, android.content.Context.MODE_PRIVATE).edit()
-        .putBoolean(KEY_CONTINUATION, enabled).apply()
-}
-
 /** Лучшая линия из позиции до хода, по шагам: 1 — лучший ход, 2 — ответ, 3 — свой следующий, 4 — ответ. */
 private fun continuationSteps(explanation: PositionExplanation): List<ContinuationStep> {
     val best = explanation.section<Section.BestMoves>() ?: return emptyList()
@@ -429,25 +451,24 @@ private fun continuationSteps(explanation: PositionExplanation): List<Continuati
 /**
  * Продолжение лучшей линии: пунктир на доске и номера здесь. Доска показывает
  * позицию после сыгранного хода, а линия идёт из позиции до него, поэтому
- * нажатие на номер ставит на доску позицию этого шага.
+ * нажатие на номер ставит на доску позицию этого шага. Один ход — не
+ * продолжение: его и так показывает зелёная стрелка.
  */
 @Composable
 private fun ContinuationRow(
     steps: List<ContinuationStep>,
-    enabled: Boolean,
+    label: String,
     shownFen: String?,
-    onToggle: (Boolean) -> Unit,
     onShow: (String?) -> Unit,
 ) {
-    if (steps.isEmpty()) return
+    if (steps.size < 2) return
     Row(
         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("Продолжение", style = MaterialTheme.typography.labelMedium)
-        Switch(checked = enabled, onCheckedChange = onToggle)
-        if (enabled) {
+        Text(label, style = MaterialTheme.typography.labelMedium)
+        run {
             steps.forEach { step ->
                 val selected = step.fenAfter == shownFen
                 Text(
@@ -525,19 +546,23 @@ private fun ScanProgress(scan: GameScan) {
 private fun MoveNavigation(currentPly: Int, lastPly: Int, moments: List<KeyMoment>, onGo: (Int) -> Unit) {
     val previousMoment = moments.lastOrNull { it.ply < currentPly }
     val nextMoment = moments.firstOrNull { it.ply > currentPly }
+    // Узкие поля кнопок: со стандартными "« Момент" на телефоне обрезался до "« Мо".
+    val padding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 8.dp)
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         FilledTonalButton(
             onClick = { previousMoment?.let { onGo(it.ply) } },
             enabled = previousMoment != null,
-            modifier = Modifier.weight(1f),
-        ) { Text("« Момент", maxLines = 1) }
-        Button(onClick = { onGo(currentPly - 1) }, enabled = currentPly >= 0, modifier = Modifier.weight(1f)) { Text("‹") }
-        Button(onClick = { onGo(currentPly + 1) }, enabled = currentPly < lastPly, modifier = Modifier.weight(1f)) { Text("›") }
+            modifier = Modifier.weight(1.3f),
+            contentPadding = padding,
+        ) { Text("« Момент", maxLines = 1, softWrap = false) }
+        Button(onClick = { onGo(currentPly - 1) }, enabled = currentPly >= 0, modifier = Modifier.weight(1f), contentPadding = padding) { Text("‹") }
+        Button(onClick = { onGo(currentPly + 1) }, enabled = currentPly < lastPly, modifier = Modifier.weight(1f), contentPadding = padding) { Text("›") }
         FilledTonalButton(
             onClick = { nextMoment?.let { onGo(it.ply) } },
             enabled = nextMoment != null,
-            modifier = Modifier.weight(1f),
-        ) { Text("Момент »", maxLines = 1) }
+            modifier = Modifier.weight(1.3f),
+            contentPadding = padding,
+        ) { Text("Момент »", maxLines = 1, softWrap = false) }
     }
 }
 
@@ -620,44 +645,6 @@ private fun VariationStrips(
     }
 }
 
-/** Текст тренера: можно выделить и скопировать, справочный блок свёрнут. */
-@Composable
-private fun CoachText(text: String) {
-    val marker = System.lineSeparator() + TextRenderer.REFERENCE_TITLE + System.lineSeparator()
-    val main = text.substringBefore(marker).trimEnd()
-    val reference = text.substringAfter(marker, "")
-    var referenceOpen by remember(text) { mutableStateOf(false) }
-
-    // Заголовки групп "━━ ДО ХОДА ━━" выделены: по ним глаз находит, где что.
-    val styled = remember(main) {
-        buildAnnotatedString {
-            main.lines().forEachIndexed { index, line ->
-                if (index > 0) append(System.lineSeparator())
-                if (line.startsWith(TextRenderer.GROUP_MARK)) {
-                    withStyle(SpanStyle(fontWeight = FontWeight.Bold, color = Palette.accent)) {
-                        append(line.removePrefix(TextRenderer.GROUP_MARK).removeSuffix(TextRenderer.GROUP_MARK).trim())
-                    }
-                } else {
-                    append(line)
-                }
-            }
-        }
-    }
-    SelectionContainer {
-        Text(styled, style = MaterialTheme.typography.bodyMedium)
-    }
-    if (reference.isNotEmpty()) {
-        TextButton(onClick = { referenceOpen = !referenceOpen }) {
-            Text(if (referenceOpen) "Скрыть термины" else "Показать термины")
-        }
-        if (referenceOpen) {
-            SelectionContainer {
-                Text(reference, style = MaterialTheme.typography.bodySmall)
-            }
-        }
-    }
-}
-
 private fun currentFen(positions: List<PlyPosition>, currentPly: Int): String = when {
     positions.isEmpty() -> START_FEN
     currentPly < 0 -> positions.first().fenBefore
@@ -693,6 +680,7 @@ private fun legendLabel(style: ArrowStyle): String = when (style) {
  * Легенда цветов стрелок — без неё серая и зелёная стрелки ничего не говорят.
  * Показывает только те виды, что реально есть на доске сейчас.
  */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun ArrowLegend(arrows: List<BoardArrow>) {
     val stylesPresent = remember(arrows) {
@@ -700,10 +688,11 @@ private fun ArrowLegend(arrows: List<BoardArrow>) {
     }
     if (stylesPresent.isEmpty()) return
 
-    Row(
-        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+    // Переносится на следующую строку, а не уезжает вбок: на телефоне конец обрезался.
+    androidx.compose.foundation.layout.FlowRow(
+        modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         stylesPresent.forEach { style ->
             Row(
@@ -836,40 +825,83 @@ private fun EvalBar(score: Score?, flipped: Boolean, modifier: Modifier = Modifi
 }
 
 /**
- * Карточка выбранного хода. Заголовок — тот же ход с оценками до и после из
- * разбора партии, поэтому числа совпадают с лентой и графиком; ниже текст тренера.
+ * Карточка выбранного хода. Оценки в заголовке — те же, что в тексте тренера:
+ * у одной позиции одно число. Пока тренер считает, чисел нет, только ход и
+ * ярлык из разбора партии. Каждое число подписано: до хода, после, потеря.
  */
 @Composable
 private fun AdviceCard(
     ply: PlyPosition?,
-    before: Score?,
     evaluation: PlyEvaluation?,
     moment: KeyMoment?,
+    explanation: PositionExplanation?,
     coachText: String?,
     thinking: Boolean,
     error: String?,
 ) {
-    GroupCard {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (ply == null) {
-                Text("Начальная позиция", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
-                Text("Выберите ход в ленте или нажмите ›, чтобы тренер его разобрал.", style = MaterialTheme.typography.bodySmall, color = Palette.secondaryText)
-                return@Column
-            }
-            Text(
-                MoveHeadline.of(ply, before, evaluation?.scoreAfterWhite, evaluation?.classification),
-                fontWeight = FontWeight.SemiBold,
-                style = MaterialTheme.typography.titleMedium,
-            )
-            moment?.let { Text(it.kind.label.replaceFirstChar(Char::uppercase) + ": " + it.detail, color = momentColor(it.kind), style = MaterialTheme.typography.bodySmall) }
-            GameEnd.of(ply.fenAfter)?.let { Text(it, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium) }
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        GroupCard {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (ply == null) {
+                    Text("Начальная позиция", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
+                    Text("Выберите ход в ленте или нажмите ›, чтобы тренер его разобрал.", style = MaterialTheme.typography.bodySmall, color = Palette.secondaryText)
+                    return@Column
+                }
+                Text(
+                    MoveHeadline.of(ply, null, null, explanation?.classification ?: evaluation?.classification),
+                    fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                explanation?.let { ScoreTags(it) }
+                // Числа момента — из быстрого разбора партии: здесь их заменяют оценки тренера выше.
+                moment?.let {
+                    val detail = it.detail.split(" · ").filterNot { part -> part.contains("→") }.joinToString(" · ")
+                    Text(
+                        it.kind.label.replaceFirstChar(Char::uppercase) + detail.takeIf(String::isNotEmpty)?.let { d -> ": $d" }.orEmpty(),
+                        color = momentColor(it.kind),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                GameEnd.of(ply.fenAfter)?.let { Text(it, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium) }
 
-            when {
-                error != null -> Text("Тренер не смог разобрать ход: $error", style = MaterialTheme.typography.bodySmall, color = Palette.danger)
-                coachText != null -> CoachText(coachText)
-                thinking -> Text("Тренер разбирает ход…", style = MaterialTheme.typography.bodySmall, color = Palette.secondaryText)
-                else -> Text("Тренер разбирает ход…", style = MaterialTheme.typography.bodySmall, color = Palette.secondaryText)
+                when {
+                    error != null -> Text("Тренер не смог разобрать ход: $error", style = MaterialTheme.typography.bodySmall, color = Palette.danger)
+                    coachText == null || thinking -> Text("Тренер разбирает ход…", style = MaterialTheme.typography.bodySmall, color = Palette.secondaryText)
+                    else -> Unit
+                }
             }
         }
+        if (ply != null && error == null && coachText != null) CoachText(coachText)
     }
+}
+
+/** "до хода -3.9", "после хода +3.7", "потеря 7.6" — подписанные метки вместо голых чисел. */
+@Composable
+private fun ScoreTags(explanation: PositionExplanation) {
+    val before = explanation.scoreFromWhite
+    val after = explanation.section<Section.AfterMove>()?.scoreFromWhite
+    val played = explanation.section<Section.PlayedMove>()
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        before?.let { ScoreTag("до хода " + ScoreFormat.short(it), Palette.background, Palette.secondaryText) }
+        after?.let { ScoreTag("после хода " + ScoreFormat.short(it), Palette.background, Palette.secondaryText) }
+        if (played != null && !played.matchesBest && played.centipawnLoss >= 5) {
+            // Упущенный мат пешками не меряют: так же, как в тексте тренера.
+            ScoreTag(
+                if (played.centipawnLoss >= 5000) "оценка рушится"
+                else "потеря " + String.format(java.util.Locale.ROOT, "%.1f", played.centipawnLoss / 100.0),
+                Color(0xFFFDE4E2),
+                Color(0xFFB3261E),
+            )
+        }
+    }
+}
+
+@Composable
+private fun ScoreTag(text: String, background: Color, foreground: Color) {
+    Text(
+        text,
+        fontSize = 13.sp,
+        color = foreground,
+        modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(background).padding(horizontal = 8.dp, vertical = 3.dp),
+    )
 }

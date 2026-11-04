@@ -160,10 +160,10 @@ class TextRendererEditorialTest {
         // он занять уже не может. Раздел всё равно печатается — с честным
         // "нет" вместо повтора: одинаковый список пунктов от позиции к позиции
         // важнее, чем экономия одной строки.
-        assertTrue(text, text.contains("ПЛАН СОПЕРНИКА"))
+        assertTrue(text, text.contains("План соперника"))
         assertTrue(text, text.contains("3. Активные ходы: нет."))
         // Первая строка "Вывод" пересказывает главную причину: это сводка, а не повтор раздела.
-        assertEquals(1, Regex("под давлением").findAll(text.substringAfter("ПОЧЕМУ")).count())
+        assertEquals(1, Regex("под давлением").findAll(text.substringAfter(TextRenderer.SECTION_MARK + "Почему")).count())
     }
 
     // ——— Редакторская сдержанность (пункт 3 правки) ———
@@ -182,7 +182,7 @@ class TextRendererEditorialTest {
 
         val text = TextRenderer.render(explanation(listOf(reasonSection(*facts.toTypedArray()))))
 
-        val whyThisMove = text.substringAfter("ПОЧЕМУ")
+        val whyThisMove = text.substringAfter(TextRenderer.SECTION_MARK + "Почему")
         assertEquals(2, Regex("под боем").findAll(whyThisMove).count())
     }
 
@@ -226,11 +226,11 @@ class TextRendererEditorialTest {
         val text = TextRenderer.render(explanation(listOf(reasonSection(overload))))
 
         // Внутри пункта причины термин голый, без скобок с определением.
-        val whyThisMove = text.substringBefore("ТЕРМИНЫ")
+        val whyThisMove = text.substringBefore(TextRenderer.REFERENCE_TITLE)
         assertFalse(whyThisMove, whyThisMove.contains(GlossaryTerm.OVERLOADED_PIECE.definition))
         // Определение — только в отдельном блоке в конце.
-        assertTrue(text, text.contains("ТЕРМИНЫ"))
-        assertTrue(text, text.substringAfter("ТЕРМИНЫ").contains(GlossaryTerm.OVERLOADED_PIECE.definition))
+        assertTrue(text, text.contains(TextRenderer.REFERENCE_TITLE))
+        assertTrue(text, text.substringAfter(TextRenderer.REFERENCE_TITLE).contains(GlossaryTerm.OVERLOADED_PIECE.definition))
     }
 
     // ——— Перечисление через запятые, не через повторное "и" (пункт 6) ———
@@ -358,7 +358,7 @@ class TextRendererEditorialTest {
         )
 
         val text = TextRenderer.render(explanation(listOf(reasonSection(opponentKing, ownKing))))
-        val whyThisMove = text.substringAfter("ПОЧЕМУ")
+        val whyThisMove = text.substringAfter(TextRenderer.SECTION_MARK + "Почему")
 
         assertEquals(1, Regex("Король").findAll(whyThisMove).count())
         assertTrue(whyThisMove, whyThisMove.contains("Король белых на h7"))

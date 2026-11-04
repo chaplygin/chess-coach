@@ -43,8 +43,8 @@ class TextRendererTest {
 
         val lines = text.lines()
         assertEquals("Миттельшпиль · Ход 14, чёрные", lines[0])
-        assertTrue(text, lines[1].startsWith("Вывод: играть Rfe8 (+0.4)"))
-        assertEquals("Оценка +0.35", lines[2])
+        assertTrue(text, lines[1].startsWith(TextRenderer.BULLET + "Вывод: играть Rfe8 (оценка +0.4)"))
+        assertEquals(TextRenderer.BULLET + "Оценка +0.35", lines[2])
     }
 
     @Test
